@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# build output
+backend/dist/
+
+# runtime storage (uploads, work, output)
+backend/storage/uploads/*
+backend/storage/work/*
+backend/storage/output/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/work/.gitkeep
+!backend/storage/output/.gitkeep
+
+# logs
+*.log
+npm-debug.log*
+
+# env
+.env
+.env.local
+
+# editor
+.vscode/
+.idea/
+.DS_Store
