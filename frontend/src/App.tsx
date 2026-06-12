@@ -155,8 +155,12 @@ function App() {
         </form>
 
         {error && (
-          <div className="mt-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            <strong className="font-semibold">Error:</strong> {error}
+          <div
+            role="alert"
+            className="mt-6 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          >
+            <div className="font-semibold">Upload failed</div>
+            <p className="mt-1 whitespace-pre-wrap break-words">{error}</p>
           </div>
         )}
 

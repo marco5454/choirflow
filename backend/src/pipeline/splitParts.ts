@@ -17,6 +17,24 @@ import { XMLParser } from 'fast-xml-parser';
 import MidiWriter from 'midi-writer-js';
 import { midiPathFor, VOICES, Voice } from '../utils/paths';
 
+/**
+ * Thrown when the uploaded file is not a usable MusicXML score.
+ * Caller (worker) records the message on the job; frontend renders it verbatim.
+ */
+export class MusicXmlValidationError extends Error {
+  readonly code = 'MUSICXML_INVALID';
+  constructor(message: string) {
+    super(message);
+    this.name = 'MusicXmlValidationError';
+  }
+}
+
+const NOT_MUSICXML_HINT =
+  'This file does not look like MusicXML. ' +
+  'A valid MusicXML score has <score-partwise> or <score-timewise> as its root element. ' +
+  'If you started from a PDF, online "PDF to XML" converters typically produce text-extraction XML, NOT MusicXML — ' +
+  'you need OMR software (e.g. Audiveris, MuseScore PDF import, PlayScore) to get real MusicXML from a PDF.';
+
 // midi-writer-js: 128 ticks per quarter note (its internal "T" tick base).
 const TICKS_PER_QUARTER = 128;
 
@@ -153,10 +171,18 @@ function buildTrackForVoice(part: ParsedPart, voice: Voice, tempo: number) {
 
 /**
  * Read a MusicXML file and write 4 MIDI files into the job's work dir.
- * Throws on structural errors (wrong part count, malformed XML).
+ * Throws MusicXmlValidationError on bad/unsupported input.
  */
 export async function splitToMidis(jobId: string, inputXmlPath: string): Promise<SplitResult> {
   const xml = await fs.promises.readFile(inputXmlPath, 'utf-8');
+
+  // Cheap pre-parse sanity check: does this look like XML at all?
+  const trimmed = xml.trimStart();
+  if (!trimmed.startsWith('<')) {
+    throw new MusicXmlValidationError(
+      `File is not XML (no opening "<" tag found). ${NOT_MUSICXML_HINT}`,
+    );
+  }
 
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -164,15 +190,57 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
     isArray: () => false,
     parseAttributeValue: false,
   });
-  const doc = parser.parse(xml);
 
+  let doc: any;
+  try {
+    doc = parser.parse(xml);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new MusicXmlValidationError(`Failed to parse XML: ${detail}. ${NOT_MUSICXML_HINT}`);
+  }
+
+  // Reject score-timewise (valid MusicXML, but we don't support it yet) and any other root.
+  if (doc['score-timewise']) {
+    throw new MusicXmlValidationError(
+      '<score-timewise> MusicXML is not yet supported. Please export as <score-partwise> ' +
+        '(the default in MuseScore, Finale, Sibelius, Dorico).',
+    );
+  }
   if (!doc['score-partwise']) {
-    throw new Error('Unsupported MusicXML: <score-partwise> root not found');
+    const rootKeys = Object.keys(doc).filter((k) => !k.startsWith('?'));
+    const rootName = rootKeys[0] ?? '(unknown)';
+    throw new MusicXmlValidationError(
+      `Root element is <${rootName}>, expected <score-partwise>. ${NOT_MUSICXML_HINT}`,
+    );
   }
 
   const parts = ensureArray(doc['score-partwise'].part);
+  if (parts.length === 0) {
+    throw new MusicXmlValidationError(
+      'MusicXML contains no <part> elements. The score appears to be empty.',
+    );
+  }
   if (parts.length !== 4) {
-    throw new Error(`Expected 4 parts (SATB); got ${parts.length}`);
+    throw new MusicXmlValidationError(
+      `Expected exactly 4 parts (Soprano, Alto, Tenor, Bass) but found ${parts.length}. ` +
+        'ChoirFlow currently only supports 4-part SATB scores.',
+    );
+  }
+
+  // Verify at least one part has at least one note — catches XML that is structurally a score but has no music.
+  const totalNotes = parts.reduce(
+    (sum: number, p: any) =>
+      sum +
+      ensureArray(p.measure).reduce(
+        (s: number, m: any) => s + ensureArray(m.note).length,
+        0,
+      ),
+    0,
+  );
+  if (totalNotes === 0) {
+    throw new MusicXmlValidationError(
+      'MusicXML has 4 parts but contains no <note> elements. Nothing to render.',
+    );
   }
 
   const partList = ensureArray(doc['score-partwise']['part-list']?.['score-part']);
