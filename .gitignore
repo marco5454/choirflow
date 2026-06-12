@@ -3,6 +3,7 @@ node_modules/
 
 # build output
 backend/dist/
+frontend/dist/
 
 # runtime storage (uploads, work, output)
 backend/storage/uploads/*
