@@ -1,9 +1,10 @@
 /**
  * Verify splitToMidis against a few fixtures, including:
  *  - the 4-part open-score fixture (regression check)
- *  - the closed-score (2-part) fixture (new feature)
+ *  - the closed-score (2-part) fixture
+ *  - a .mxl (compressed MusicXML) built on the fly from the open-score fixture
  *
- * Also runs against any extra .xml file passed on the command line.
+ * Also runs against any extra file (.xml/.musicxml/.mxl) passed on the command line.
  *
  * Run:
  *   npx ts-node scripts/verify-split.ts
@@ -12,8 +13,9 @@
 
 import path from 'path';
 import fs from 'fs';
+import AdmZip from 'adm-zip';
 import { splitToMidis, MusicXmlValidationError } from '../src/pipeline/splitParts';
-import { ensureBootDirs, midiPathFor, VOICES } from '../src/utils/paths';
+import { ensureBootDirs, midiPathFor, VOICES, WORK_ROOT } from '../src/utils/paths';
 
 async function runOne(label: string, jobId: string, xmlPath: string): Promise<void> {
   console.log(`\n=== ${label} ===`);
@@ -42,6 +44,31 @@ async function runOne(label: string, jobId: string, xmlPath: string): Promise<vo
   }
 }
 
+/**
+ * Build a valid .mxl on disk from a plain MusicXML file. Returns the .mxl path.
+ * The archive layout follows the MusicXML container spec:
+ *   META-INF/container.xml  (declares the rootfile path)
+ *   <scoreName>.xml         (the score itself)
+ */
+function buildMxlFixture(srcXmlPath: string, outMxlPath: string): string {
+  const xml = fs.readFileSync(srcXmlPath, 'utf-8');
+  const innerName = path.basename(srcXmlPath); // e.g. "satb-sample.xml"
+
+  const containerXml =
+    '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<container>\n' +
+    '  <rootfiles>\n' +
+    `    <rootfile full-path="${innerName}" media-type="application/vnd.recordare.musicxml+xml"/>\n` +
+    '  </rootfiles>\n' +
+    '</container>\n';
+
+  const zip = new AdmZip();
+  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf-8'));
+  zip.addFile(innerName, Buffer.from(xml, 'utf-8'));
+  zip.writeZip(outMxlPath);
+  return outMxlPath;
+}
+
 async function main(): Promise<void> {
   ensureBootDirs();
 
@@ -58,6 +85,19 @@ async function main(): Promise<void> {
     'verify-closed-score',
     path.join(fixturesDir, 'satb-closed-score.xml'),
   );
+
+  // Build an .mxl on the fly from the open-score fixture and verify it
+  // produces equivalent output. The output should match the open-score run
+  // byte-for-byte (same source XML, same splitter logic, same MIDI writer).
+  const openSrc = path.join(fixturesDir, 'satb-sample.xml');
+  if (fs.existsSync(openSrc)) {
+    const mxlPath = path.join(WORK_ROOT, 'verify-mxl-from-open.mxl');
+    buildMxlFixture(openSrc, mxlPath);
+    await runOne('compressed (.mxl) — built from open-score fixture', 'verify-mxl', mxlPath);
+  } else {
+    console.log('\n=== compressed (.mxl) ===');
+    console.log('  SKIP (open-score source fixture missing)');
+  }
 
   // Optionally run against any extra files passed in argv.
   const extras = process.argv.slice(2);

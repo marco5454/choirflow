@@ -21,13 +21,14 @@
  *   - Tempo from first <sound tempo="..."/> encountered, else 120.
  *   - <chord> sequences with 3+ notes drop middle pitches.
  *   - Ties / slurs / dynamics / repeats / tuplets not honoured.
- *   - .mxl (compressed MusicXML) not supported here — caller passes uncompressed.
+ *   - .mxl (compressed MusicXML) is unwrapped transparently via loadMusicXmlText.
  */
 
 import fs from 'fs';
 import { XMLParser } from 'fast-xml-parser';
 import MidiWriter from 'midi-writer-js';
 import { midiPathFor, VOICES, Voice } from '../utils/paths';
+import { loadMusicXmlText } from './readMusicXml';
 
 /**
  * Thrown when the uploaded file is not a usable MusicXML score.
@@ -580,7 +581,7 @@ function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
  * Throws MusicXmlValidationError on bad/unsupported input.
  */
 export async function splitToMidis(jobId: string, inputXmlPath: string): Promise<SplitResult> {
-  const xml = await fs.promises.readFile(inputXmlPath, 'utf-8');
+  const xml = await loadMusicXmlText(inputXmlPath);
 
   // Cheap pre-parse sanity check: does this look like XML at all?
   const trimmed = xml.trimStart();
