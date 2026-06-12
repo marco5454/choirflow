@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { ensureBootDirs, STORAGE_ROOT } from './utils/paths';
+import { preflight } from './utils/preflight';
 import uploadRouter from './routes/upload';
 import statusRouter from './routes/status';
 import downloadRouter from './routes/download';
@@ -7,6 +8,7 @@ import downloadRouter from './routes/download';
 const PORT = Number(process.env.PORT) || 3000;
 
 ensureBootDirs();
+void preflight();
 
 const app = express();
 

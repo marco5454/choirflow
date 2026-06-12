@@ -1,9 +1,7 @@
 /**
  * Async pipeline worker.
  *
- * Step 2 scope: pending → splitting → done.
- * Step 3 (audio render) will add: splitting → rendering → done.
- *
+ * Stages: pending → splitting → rendering → done (or failed at any point).
  * Fire-and-forget: routes/upload.ts calls runPipeline(jobId) and immediately
  * responds to the client. The client then polls /status/:jobId.
  */
@@ -11,6 +9,7 @@
 import { updateJob } from './jobQueue';
 import { findUploadFor } from '../utils/paths';
 import { splitToMidis } from '../pipeline/splitParts';
+import { renderAudio } from '../pipeline/renderAudio';
 
 export async function runPipeline(jobId: string): Promise<void> {
   try {
@@ -20,12 +19,17 @@ export async function runPipeline(jobId: string): Promise<void> {
     }
 
     updateJob(jobId, { status: 'splitting' });
-    const result = await splitToMidis(jobId, inputPath);
+    const splitResult = await splitToMidis(jobId, inputPath);
     console.log(
-      `[job ${jobId}] split done: tempo=${result.tempo}, parts=${result.partNames.join('/')}`,
+      `[job ${jobId}] split done: tempo=${splitResult.tempo}, parts=${splitResult.partNames.join('/')}`,
     );
 
-    // Step 3 will insert: updateJob(jobId, { status: 'rendering' }); await renderAudio(...)
+    updateJob(jobId, { status: 'rendering' });
+    const renderResult = await renderAudio(jobId);
+    console.log(
+      `[job ${jobId}] render done: ${Object.keys(renderResult.mp3Paths).join(', ')}`,
+    );
+
     updateJob(jobId, { status: 'done' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
