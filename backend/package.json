@@ -8,7 +8,9 @@
     "dev": "ts-node src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "spike": "ts-node scripts/spike-split.ts"
+    "spike": "ts-node scripts/spike-split.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -28,6 +30,7 @@
     "@types/node": "^20.12.7",
     "@types/uuid": "^10.0.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.8"
   }
 }

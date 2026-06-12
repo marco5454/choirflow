@@ -6,6 +6,9 @@
  *
  * Also runs against any extra file (.xml/.musicxml/.mxl) passed on the command line.
  *
+ * The .mxl-builder logic lives in tests/helpers/buildMxl.ts and is shared with
+ * the test suite, so this script and the tests stay in lock-step.
+ *
  * Run:
  *   npx ts-node scripts/verify-split.ts
  *   npx ts-node scripts/verify-split.ts /path/to/your/file.xml
@@ -13,9 +16,9 @@
 
 import path from 'path';
 import fs from 'fs';
-import AdmZip from 'adm-zip';
 import { splitToMidis, MusicXmlValidationError } from '../src/pipeline/splitParts';
 import { ensureBootDirs, midiPathFor, VOICES, WORK_ROOT } from '../src/utils/paths';
+import { buildMxlFixture } from '../tests/helpers/buildMxl';
 
 async function runOne(label: string, jobId: string, xmlPath: string): Promise<void> {
   console.log(`\n=== ${label} ===`);
@@ -42,31 +45,6 @@ async function runOne(label: string, jobId: string, xmlPath: string): Promise<vo
     }
     process.exitCode = 1;
   }
-}
-
-/**
- * Build a valid .mxl on disk from a plain MusicXML file. Returns the .mxl path.
- * The archive layout follows the MusicXML container spec:
- *   META-INF/container.xml  (declares the rootfile path)
- *   <scoreName>.xml         (the score itself)
- */
-function buildMxlFixture(srcXmlPath: string, outMxlPath: string): string {
-  const xml = fs.readFileSync(srcXmlPath, 'utf-8');
-  const innerName = path.basename(srcXmlPath); // e.g. "satb-sample.xml"
-
-  const containerXml =
-    '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    '<container>\n' +
-    '  <rootfiles>\n' +
-    `    <rootfile full-path="${innerName}" media-type="application/vnd.recordare.musicxml+xml"/>\n` +
-    '  </rootfiles>\n' +
-    '</container>\n';
-
-  const zip = new AdmZip();
-  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf-8'));
-  zip.addFile(innerName, Buffer.from(xml, 'utf-8'));
-  zip.writeZip(outMxlPath);
-  return outMxlPath;
 }
 
 async function main(): Promise<void> {
