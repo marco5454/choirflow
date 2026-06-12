@@ -49,3 +49,61 @@ export function findUploadFor(jobId: string): string | null {
   const match = entries.find((name) => name.startsWith(jobId + '.'));
   return match ? path.join(UPLOADS_DIR, match) : null;
 }
+
+/**
+ * Best-effort sweep of upload/work/output entries older than `maxAgeMs`.
+ * Called once at boot. Failures are logged and swallowed — we never want the
+ * janitor to crash the server. Returns counts for logging.
+ *
+ * "Old enough" = mtime older than now - maxAgeMs. We deliberately don't
+ * cross-reference with the in-memory job map: jobs only live in memory, so
+ * after a restart there's no map to consult and mtime is the only signal.
+ */
+export interface SweepResult {
+  uploads: number;
+  workDirs: number;
+  outputDirs: number;
+}
+
+export function sweepOldArtifacts(maxAgeMs: number): SweepResult {
+  const cutoff = Date.now() - maxAgeMs;
+  const result: SweepResult = { uploads: 0, workDirs: 0, outputDirs: 0 };
+
+  // Files in UPLOADS_DIR (one file per job, named <jobId>.<ext>).
+  if (fs.existsSync(UPLOADS_DIR)) {
+    for (const name of fs.readdirSync(UPLOADS_DIR)) {
+      const full = path.join(UPLOADS_DIR, name);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isFile() && stat.mtimeMs < cutoff) {
+          fs.unlinkSync(full);
+          result.uploads += 1;
+        }
+      } catch (err) {
+        console.warn(`[janitor] could not process ${full}:`, (err as Error).message);
+      }
+    }
+  }
+
+  // Subdirectories of WORK_ROOT and OUTPUT_ROOT (one dir per job).
+  for (const [root, key] of [
+    [WORK_ROOT, 'workDirs'],
+    [OUTPUT_ROOT, 'outputDirs'],
+  ] as const) {
+    if (!fs.existsSync(root)) continue;
+    for (const name of fs.readdirSync(root)) {
+      const full = path.join(root, name);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isDirectory() && stat.mtimeMs < cutoff) {
+          fs.rmSync(full, { recursive: true, force: true });
+          result[key] += 1;
+        }
+      } catch (err) {
+        console.warn(`[janitor] could not process ${full}:`, (err as Error).message);
+      }
+    }
+  }
+
+  return result;
+}
