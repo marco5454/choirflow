@@ -97,6 +97,7 @@ describe('runPipeline – MusicXML happy path', () => {
     expect(statusAtRender).toHaveBeenCalledWith('rendering');
     expect(getJob(id)?.status).toBe('done');
     expect(getJob(id)?.error).toBeUndefined();
+    expect(getJob(id)?.failedStage).toBeUndefined();
   });
 });
 
@@ -134,6 +135,7 @@ describe('runPipeline – PDF happy path', () => {
 
     expect(renderAudio).toHaveBeenCalledTimes(1);
     expect(getJob(id)?.status).toBe('done');
+    expect(getJob(id)?.failedStage).toBeUndefined();
   });
 });
 
@@ -148,8 +150,26 @@ describe('runPipeline – failure modes', () => {
     const job = getJob(id);
     expect(job?.status).toBe('failed');
     expect(job?.error).toMatch(/Upload file.*not found/i);
+    expect(job?.failedStage).toBe('pending');
 
     expect(runOmr).not.toHaveBeenCalled();
+    expect(splitToMidis).not.toHaveBeenCalled();
+    expect(renderAudio).not.toHaveBeenCalled();
+  });
+
+  it('marks failed at omr when runOmr throws (PDF upload)', async () => {
+    const id = jobId('omr-err');
+    createJob(id);
+    plantUpload(id, '.pdf');
+
+    vi.mocked(runOmr).mockRejectedValue(new Error('audiveris choked'));
+
+    await runPipeline(id);
+
+    const job = getJob(id);
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toBe('audiveris choked');
+    expect(job?.failedStage).toBe('omr');
     expect(splitToMidis).not.toHaveBeenCalled();
     expect(renderAudio).not.toHaveBeenCalled();
   });
@@ -166,6 +186,7 @@ describe('runPipeline – failure modes', () => {
     const job = getJob(id);
     expect(job?.status).toBe('failed');
     expect(job?.error).toBe('bad musicxml');
+    expect(job?.failedStage).toBe('splitting');
     expect(renderAudio).not.toHaveBeenCalled();
   });
 
@@ -192,5 +213,6 @@ describe('runPipeline – failure modes', () => {
     const job = getJob(id);
     expect(job?.status).toBe('failed');
     expect(job?.error).toBe('fluidsynth exploded');
+    expect(job?.failedStage).toBe('rendering');
   });
 });
