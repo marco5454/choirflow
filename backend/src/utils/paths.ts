@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import { logger } from './logger';
 
 /**
  * Storage layout (all under backend/storage):
@@ -80,7 +81,7 @@ export function sweepOldArtifacts(maxAgeMs: number): SweepResult {
           result.uploads += 1;
         }
       } catch (err) {
-        console.warn(`[janitor] could not process ${full}:`, (err as Error).message);
+        logger.warn({ path: full, err: (err as Error).message }, 'janitor: could not process upload');
       }
     }
   }
@@ -100,7 +101,7 @@ export function sweepOldArtifacts(maxAgeMs: number): SweepResult {
           result[key] += 1;
         }
       } catch (err) {
-        console.warn(`[janitor] could not process ${full}:`, (err as Error).message);
+        logger.warn({ path: full, err: (err as Error).message }, 'janitor: could not process directory');
       }
     }
   }

@@ -14,9 +14,34 @@ import uploadRouter from './routes/upload';
 import statusRouter from './routes/status';
 import downloadRouter from './routes/download';
 import { createUploadRateLimiter } from './middleware/uploadRateLimit';
+import { logger } from './utils/logger';
 
 export function createApp(): express.Express {
   const app = express();
+
+  // Per-request access log: one line on receipt, one on completion with status
+  // and duration. /health is skipped to avoid spamming load-balancer pings.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/health') {
+      next();
+      return;
+    }
+    const start = process.hrtime.bigint();
+    logger.info({ method: req.method, path: req.path }, 'request received');
+    res.on('finish', () => {
+      const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
+      logger.info(
+        {
+          method: req.method,
+          path: req.path,
+          status: res.statusCode,
+          durationMs: Math.round(durationMs),
+        },
+        'request completed',
+      );
+    });
+    next();
+  });
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true });

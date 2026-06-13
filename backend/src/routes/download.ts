@@ -6,6 +6,7 @@ import { getJob } from '../jobs/jobQueue';
 import type { Voice } from '../utils/paths';
 import { mp3PathFor, VOICES } from '../utils/paths';
 import { validateJobIdParam } from '../middleware/validateJobIdParam';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -44,10 +45,10 @@ router.get('/download/:jobId/all', (req: Request, res: Response) => {
   const archive = archiver('zip', { zlib: { level: 9 } });
 
   archive.on('warning', (err: Error) => {
-    console.warn(`[job ${jobId}] zip warning:`, err.message);
+    logger.warn({ jobId, err: err.message }, 'zip warning');
   });
   archive.on('error', (err: Error) => {
-    console.error(`[job ${jobId}] zip error:`, err.message);
+    logger.error({ jobId, err: err.message }, 'zip error');
     // Headers are already sent by the time archiver emits errors, so we can
     // only abort the response. The client will see a truncated stream.
     if (!res.headersSent) {

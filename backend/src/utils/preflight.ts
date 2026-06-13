@@ -8,6 +8,7 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import { getSoundfontPath } from '../pipeline/renderAudio';
 import { getAudiverisBin } from '../pipeline/runOmr';
+import { logger } from './logger';
 
 function which(bin: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -36,31 +37,36 @@ export async function preflight(): Promise<void> {
   const soundfontPath = getSoundfontPath();
   const sfExists = fs.existsSync(soundfontPath);
 
-  console.log('[preflight] fluidsynth:', fluid ?? 'NOT FOUND');
-  console.log('[preflight] ffmpeg:    ', ffmpeg ?? 'NOT FOUND');
-  console.log('[preflight] audiveris: ', audiveris ?? `NOT FOUND (${getAudiverisBin()})`);
-  console.log('[preflight] soundfont: ', soundfontPath, sfExists ? '(ok)' : '(MISSING)');
+  logger.info(
+    {
+      fluidsynth: fluid ?? null,
+      ffmpeg: ffmpeg ?? null,
+      audiveris: audiveris ?? null,
+      audiverisBin: getAudiverisBin(),
+      soundfont: soundfontPath,
+      soundfontExists: sfExists,
+    },
+    'preflight: external dependency check',
+  );
 
   if (!fluid || !ffmpeg) {
-    console.warn(
-      '[preflight] WARNING: audio render binaries missing. ' +
-        'Jobs will fail at the rendering stage. ' +
+    logger.warn(
+      'preflight: audio render binaries missing. Jobs will fail at the rendering stage. ' +
         'Install: sudo apt-get install -y fluidsynth ffmpeg',
     );
   }
   if (!audiveris) {
-    console.warn(
-      '[preflight] WARNING: Audiveris not found. ' +
-        'PDF uploads will fail at the OMR stage (MusicXML uploads are unaffected). ' +
-        'Install from https://github.com/Audiveris/audiveris/releases ' +
-        'or set AUDIVERIS_BIN to its launcher path.',
+    logger.warn(
+      'preflight: Audiveris not found. PDF uploads will fail at the OMR stage ' +
+        '(MusicXML uploads are unaffected). Install from ' +
+        'https://github.com/Audiveris/audiveris/releases or set AUDIVERIS_BIN.',
     );
   }
   if (!sfExists) {
-    console.warn(
-      `[preflight] WARNING: soundfont not found at ${soundfontPath}. ` +
-        'The vendored GeneralUser-GS.sf2 should live at backend/assets/soundfonts/. ' +
-        'Re-clone the repo, or set SOUNDFONT_PATH to a valid .sf2 file.',
+    logger.warn(
+      { soundfontPath },
+      'preflight: soundfont not found. The vendored GeneralUser-GS.sf2 should live at ' +
+        'backend/assets/soundfonts/. Re-clone the repo, or set SOUNDFONT_PATH.',
     );
   }
 }

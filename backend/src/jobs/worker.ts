@@ -16,8 +16,10 @@ import { findUploadFor } from '../utils/paths';
 import { runOmr } from '../pipeline/runOmr';
 import { splitToMidis } from '../pipeline/splitParts';
 import { renderAudio } from '../pipeline/renderAudio';
+import { logger } from '../utils/logger';
 
 export async function runPipeline(jobId: string): Promise<void> {
+  const log = logger.child({ jobId });
   try {
     const uploadPath = findUploadFor(jobId);
     if (!uploadPath) {
@@ -29,26 +31,25 @@ export async function runPipeline(jobId: string): Promise<void> {
       updateJob(jobId, { status: 'omr' });
       const omrResult = await runOmr(jobId, uploadPath);
       musicXmlPath = omrResult.musicXmlPath;
-      console.log(`[job ${jobId}] omr done: ${path.basename(musicXmlPath)}`);
+      log.info({ output: path.basename(musicXmlPath) }, 'omr done');
     }
 
     updateJob(jobId, { status: 'splitting' });
     const splitResult = await splitToMidis(jobId, musicXmlPath);
-    console.log(
-      `[job ${jobId}] split done: tempo=${splitResult.tempo}, parts=${splitResult.partNames.join('/')}`,
+    log.info(
+      { tempo: splitResult.tempo, parts: splitResult.partNames },
+      'split done',
     );
 
     updateJob(jobId, { status: 'rendering' });
     const renderResult = await renderAudio(jobId);
-    console.log(
-      `[job ${jobId}] render done: ${Object.keys(renderResult.mp3Paths).join(', ')}`,
-    );
+    log.info({ voices: Object.keys(renderResult.mp3Paths) }, 'render done');
 
     updateJob(jobId, { status: 'done' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const failedStage = getJob(jobId)?.status;
-    console.error(`[job ${jobId}] pipeline failed at ${failedStage}:`, message);
+    log.error({ failedStage, err: message }, 'pipeline failed');
     updateJob(jobId, { status: 'failed', error: message, failedStage });
   } finally {
     // Schedule artifact cleanup whether the job succeeded or failed.

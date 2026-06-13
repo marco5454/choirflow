@@ -13,6 +13,7 @@ import { preflight } from './utils/preflight';
 import { getCleanupDelayMs } from './jobs/cleanup';
 import { getMaxConcurrency } from './jobs/jobRunner';
 import { getUploadRateLimitConfig } from './middleware/uploadRateLimit';
+import { logger } from './utils/logger';
 
 const PORT = Number(process.env.PORT) || 3000;
 const JOB_RETENTION_HOURS = Number(process.env.JOB_RETENTION_HOURS ?? 24);
@@ -25,30 +26,39 @@ void preflight();
 try {
   const swept = sweepOldArtifacts(JOB_RETENTION_HOURS * 60 * 60 * 1000);
   if (swept.uploads || swept.workDirs || swept.outputDirs) {
-    console.log(
-      `[janitor] removed ${swept.uploads} upload(s), ${swept.workDirs} work dir(s), ${swept.outputDirs} output dir(s) older than ${JOB_RETENTION_HOURS}h`,
+    logger.info(
+      {
+        uploads: swept.uploads,
+        workDirs: swept.workDirs,
+        outputDirs: swept.outputDirs,
+        olderThanHours: JOB_RETENTION_HOURS,
+      },
+      'janitor swept old artifacts',
     );
   }
 } catch (err) {
-  console.warn('[janitor] sweep failed:', (err as Error).message);
+  logger.warn({ err: (err as Error).message }, 'janitor sweep failed');
 }
 
 const app = createApp();
 
 app.listen(PORT, () => {
-  console.log(`ChoirFlow backend listening on http://localhost:${PORT}`);
-  console.log(`Storage root: ${STORAGE_ROOT}`);
+  logger.info({ port: PORT }, `ChoirFlow backend listening on http://localhost:${PORT}`);
+  logger.info({ storageRoot: STORAGE_ROOT }, 'storage root');
   const cleanupMs = getCleanupDelayMs();
   if (cleanupMs > 0) {
-    console.log(`Per-job cleanup scheduled ${cleanupMs / 60000} min after completion.`);
+    logger.info({ minutes: cleanupMs / 60000 }, 'per-job cleanup scheduled after completion');
   } else {
-    console.log('Per-job runtime cleanup disabled (JOB_CLEANUP_AFTER_MINUTES=0).');
+    logger.info('per-job runtime cleanup disabled (JOB_CLEANUP_AFTER_MINUTES=0)');
   }
   const rl = getUploadRateLimitConfig();
   if (rl.max > 0) {
-    console.log(`Upload rate limit: ${rl.max} request(s) per ${rl.windowMs / 60000} min per IP.`);
+    logger.info(
+      { max: rl.max, windowMinutes: rl.windowMs / 60000 },
+      'upload rate limit configured',
+    );
   } else {
-    console.log('Upload rate limit disabled (UPLOAD_RATE_MAX=0).');
+    logger.info('upload rate limit disabled (UPLOAD_RATE_MAX=0)');
   }
-  console.log(`Job concurrency: max ${getMaxConcurrency()} parallel pipeline(s).`);
+  logger.info({ max: getMaxConcurrency() }, 'job concurrency configured');
 });

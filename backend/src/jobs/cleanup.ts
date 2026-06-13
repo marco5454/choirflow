@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { WORK_ROOT, OUTPUT_ROOT, findUploadFor } from '../utils/paths';
 import { deleteJob } from './jobQueue';
+import { logger } from '../utils/logger';
 
 const timers = new Map<string, NodeJS.Timeout>();
 
@@ -84,7 +85,7 @@ export function runCleanupNow(jobId: string): void {
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code !== 'ENOENT') {
-        console.warn(`[cleanup] failed to delete ${uploadPath}:`, e.message);
+        logger.warn({ jobId, path: uploadPath, err: e.message }, 'cleanup: failed to delete upload');
       }
     }
   }
@@ -95,7 +96,7 @@ export function runCleanupNow(jobId: string): void {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch (err) {
-      console.warn(`[cleanup] failed to remove ${dir}:`, (err as Error).message);
+      logger.warn({ jobId, dir, err: (err as Error).message }, 'cleanup: failed to remove directory');
     }
   }
 

@@ -30,6 +30,7 @@ import MidiWriter from 'midi-writer-js';
 import type { Voice } from '../utils/paths';
 import { midiPathFor, VOICES } from '../utils/paths';
 import { loadMusicXmlText } from './readMusicXml';
+import { logger } from '../utils/logger';
 
 /**
  * Thrown when the uploaded file is not a usable MusicXML score.
@@ -474,8 +475,9 @@ function splitClosedScorePart(
   }
 
   if (chordsTrimmed > 0) {
-    console.warn(
-      `[job ${jobId}] [${partLabel}] WARN: ${chordsTrimmed} chord(s) had 3+ notes; kept only highest+lowest (MVP scope).`,
+    logger.warn(
+      { jobId, partLabel, chordsTrimmed },
+      'chord(s) had 3+ notes; kept only highest+lowest (MVP scope)',
     );
   }
 
@@ -750,8 +752,9 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
     for (let i = 0; i < 4; i++) {
       const name = partNames[i] ?? '';
       if (name && !name.includes(expected[i])) {
-        console.warn(
-          `[job ${jobId}] WARN: part ${i} is "${name}", expected to contain "${expected[i]}". Assuming S/A/T/B order anyway.`,
+        logger.warn(
+          { jobId, partIndex: i, name, expected: expected[i] },
+          'part name does not match expected SATB position; assuming S/A/T/B order anyway',
         );
       }
     }
@@ -767,8 +770,9 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
     let bassIdx = parsedParts.findIndex((p) => p.clef === 'bass');
     if (trebleIdx === -1 && bassIdx === -1) {
       // No clef info — assume document order: P1 = treble, P2 = bass.
-      console.warn(
-        `[job ${jobId}] WARN: 2-part score has no clefs; assuming part 1 = treble (S+A), part 2 = bass (T+B).`,
+      logger.warn(
+        { jobId },
+        '2-part score has no clefs; assuming part 1 = treble (S+A), part 2 = bass (T+B)',
       );
       trebleIdx = 0;
       bassIdx = 1;
@@ -802,15 +806,22 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
       bass: bassSplit.lower,
     };
 
-    console.log(
-      `[job ${jobId}] closed-score detected: part ${trebleIdx + 1} (${parsedParts[trebleIdx].partName || 'unnamed'}) -> S/A, part ${bassIdx + 1} (${parsedParts[bassIdx].partName || 'unnamed'}) -> T/B.`,
+    logger.info(
+      {
+        jobId,
+        treblePart: trebleIdx + 1,
+        trebleName: parsedParts[trebleIdx].partName || null,
+        bassPart: bassIdx + 1,
+        bassName: parsedParts[bassIdx].partName || null,
+      },
+      'closed-score detected',
     );
   }
 
   for (const voice of VOICES) {
     const notes = voiceNotesByOutput[voice];
     if (notes.length === 0) {
-      console.warn(`[job ${jobId}] WARN: voice "${voice}" produced 0 notes.`);
+      logger.warn({ jobId, voice }, 'voice produced 0 notes');
     }
     const track = buildTrack(notes, voice, tempo);
     const writer = new MidiWriter.Writer([track]);

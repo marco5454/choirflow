@@ -17,6 +17,7 @@
  */
 
 import { runPipeline } from './worker';
+import { logger } from '../utils/logger';
 
 const DEFAULT_MAX_CONCURRENCY = 2;
 
@@ -51,7 +52,7 @@ function pump(): void {
     pipelineFn(next)
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`[jobRunner] pipeline ${next} threw:`, msg);
+        logger.error({ jobId: next, err: msg }, 'jobRunner: pipeline threw');
       })
       .finally(() => {
         running -= 1;
