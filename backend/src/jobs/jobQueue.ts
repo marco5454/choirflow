@@ -15,6 +15,8 @@ export interface Job {
   id: string;
   status: JobStatus;
   error?: string;
+  /** Stage that was active when the pipeline threw. Set only when status === 'failed'. */
+  failedStage?: JobStatus;
   createdAt: string; // ISO timestamp
   updatedAt: string; // ISO timestamp
 }
@@ -39,7 +41,7 @@ export function getJob(id: string): Job | undefined {
 
 export function updateJob(
   id: string,
-  patch: Partial<Pick<Job, 'status' | 'error'>>,
+  patch: Partial<Pick<Job, 'status' | 'error' | 'failedStage'>>,
 ): Job | undefined {
   const existing = jobs.get(id);
   if (!existing) return undefined;

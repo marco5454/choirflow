@@ -10,7 +10,7 @@
  */
 
 import path from 'path';
-import { updateJob } from './jobQueue';
+import { getJob, updateJob } from './jobQueue';
 import { findUploadFor } from '../utils/paths';
 import { runOmr } from '../pipeline/runOmr';
 import { splitToMidis } from '../pipeline/splitParts';
@@ -46,7 +46,8 @@ export async function runPipeline(jobId: string): Promise<void> {
     updateJob(jobId, { status: 'done' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[job ${jobId}] pipeline failed:`, message);
-    updateJob(jobId, { status: 'failed', error: message });
+    const failedStage = getJob(jobId)?.status;
+    console.error(`[job ${jobId}] pipeline failed at ${failedStage}:`, message);
+    updateJob(jobId, { status: 'failed', error: message, failedStage });
   }
 }
