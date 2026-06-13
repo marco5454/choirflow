@@ -1,9 +1,15 @@
-import express, { Request, Response, NextFunction } from 'express';
+/**
+ * Boot entrypoint.
+ *
+ * Performs environment setup (directory creation, preflight checks,
+ * janitor sweep) and then binds the HTTP app to a port. The app itself
+ * is built by `createApp()` in `app.ts` so it can be reused under test
+ * without side-effects.
+ */
+
+import { createApp } from './app';
 import { ensureBootDirs, sweepOldArtifacts, STORAGE_ROOT } from './utils/paths';
 import { preflight } from './utils/preflight';
-import uploadRouter from './routes/upload';
-import statusRouter from './routes/status';
-import downloadRouter from './routes/download';
 
 const PORT = Number(process.env.PORT) || 3000;
 const JOB_RETENTION_HOURS = Number(process.env.JOB_RETENTION_HOURS ?? 24);
@@ -24,21 +30,7 @@ try {
   console.warn('[janitor] sweep failed:', (err as Error).message);
 }
 
-const app = express();
-
-app.get('/health', (_req, res) => {
-  res.json({ ok: true });
-});
-
-app.use(uploadRouter);
-app.use(statusRouter);
-app.use(downloadRouter);
-
-// Centralized error handler (catches multer errors, etc.)
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  res.status(400).json({ error: err.message });
-});
+const app = createApp();
 
 app.listen(PORT, () => {
   console.log(`ChoirFlow backend listening on http://localhost:${PORT}`);
