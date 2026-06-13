@@ -13,6 +13,9 @@ backend/storage/output/*
 !backend/storage/work/.gitkeep
 !backend/storage/output/.gitkeep
 
+# test artefacts
+backend/tests/output/
+
 # logs
 *.log
 npm-debug.log*
