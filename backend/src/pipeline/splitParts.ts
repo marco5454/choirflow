@@ -569,6 +569,84 @@ function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
 }
 
 /**
+ * Inspect <score-part> entries + <part> bodies to produce a diagnostic
+ * description of an unsupported part layout. Used when the count is not
+ * 2 or 4. Detects common non-SATB cases (vocal+piano, SAB, SAT) and falls
+ * back to listing what was found so the user can act on it.
+ *
+ * Both inputs are arrays from fast-xml-parser's structured output:
+ *   partList:  the <score-part> elements (with part-name, score-instrument)
+ *   partsXml:  the <part> elements (whose <attributes><staves> matter)
+ */
+function diagnosePartLayout(partList: any[], partsXml: any[]): string {
+  const partNames = partList.map((p: any) => String(p?.['part-name'] ?? '').trim());
+  const lowerNames = partNames.map((n) => n.toLowerCase());
+  const instrumentNames = partList.map((p: any) =>
+    String(p?.['score-instrument']?.['instrument-name'] ?? '').toLowerCase(),
+  );
+
+  // Staff count from the first <attributes> block of each <part>.
+  // Most parts implicitly have 1 staff; piano grand staff has 2.
+  const staffCounts = partsXml.map((p: any): number => {
+    const firstMeasure = ensureArray(p?.measure)[0];
+    const attr = ensureArray(firstMeasure?.attributes)[0];
+    const staves = attr?.staves;
+    const n = staves !== undefined && staves !== null ? Number(staves) : 1;
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  });
+
+  const isPianoLike = (i: number): boolean =>
+    /piano|keyboard|organ|grand/i.test(lowerNames[i] ?? '') ||
+    /piano|keyboard|organ|grand/i.test(instrumentNames[i] ?? '') ||
+    staffCounts[i] >= 2;
+
+  const pianoIdx = staffCounts.map((_, i) => (isPianoLike(i) ? i : -1)).filter((i) => i >= 0);
+
+  // Format a "found N parts: ..." listing for inclusion in any message.
+  const found = `found ${partsXml.length} parts (${partNames
+    .map((n, i) => `"${n || '(unnamed)'}"${staffCounts[i] >= 2 ? ` [${staffCounts[i]} staves]` : ''}`)
+    .join(', ')})`;
+
+  // Case 1: vocal + piano accompaniment (any part looks like piano).
+  if (pianoIdx.length > 0 && partsXml.length !== 2 && partsXml.length !== 4) {
+    return (
+      `This score looks like a vocal + piano accompaniment, not an SATB choir score: ${found}. ` +
+      `ChoirFlow currently supports only standard SATB scores ` +
+      `(4 separate vocal staves, or 2 staves with women on treble + men on bass).`
+    );
+  }
+
+  // Case 2: SAB — 3 parts named soprano/alto/bass (any order, no tenor).
+  if (partsXml.length === 3) {
+    const has = (needle: string) => lowerNames.some((n) => n.includes(needle));
+    const s = has('soprano');
+    const a = has('alto');
+    const t = has('tenor');
+    const b = has('bass');
+    if (s && a && b && !t) {
+      return (
+        `This score looks like SAB (Soprano / Alto / Bass), not SATB: ${found}. ` +
+        `ChoirFlow currently supports only 4-voice SATB scores; SAB arrangements ` +
+        `(no tenor line) are not yet supported.`
+      );
+    }
+    if (s && a && t && !b) {
+      return (
+        `This score looks like SAT (Soprano / Alto / Tenor), missing the bass line: ${found}. ` +
+        `ChoirFlow currently supports only standard SATB scores.`
+      );
+    }
+  }
+
+  // Generic fallback: list what was found so the user can diagnose.
+  return (
+    `Expected 2 parts (closed-score: treble + bass staves) or 4 parts ` +
+    `(open-score: S, A, T, B), but ${found}. ` +
+    `ChoirFlow currently supports only standard SATB scores.`
+  );
+}
+
+/**
  * Read a MusicXML file and write 4 MIDI files into the job's work dir.
  * Throws MusicXmlValidationError on bad/unsupported input.
  */
@@ -625,16 +703,14 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
   }
 
   const partsXml = ensureArray(doc['score-partwise'].part);
+  const partList = ensureArray(doc['score-partwise']['part-list']?.['score-part']);
   if (partsXml.length === 0) {
     throw new MusicXmlValidationError(
       'MusicXML contains no <part> elements. The score appears to be empty.',
     );
   }
   if (partsXml.length !== 2 && partsXml.length !== 4) {
-    throw new MusicXmlValidationError(
-      `Expected 2 parts (closed-score: treble + bass staves) or 4 parts (open-score: S, A, T, B), ` +
-        `but found ${partsXml.length}. ChoirFlow currently supports only standard SATB scores.`,
-    );
+    throw new MusicXmlValidationError(diagnosePartLayout(partList, partsXml));
   }
 
   // Verify at least one part has at least one note.
@@ -653,7 +729,6 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
   // Graft document-ordered children onto each <measure>._ordered.
   attachOrderedMeasureChildren(doc, docOrdered);
 
-  const partList = ensureArray(doc['score-partwise']['part-list']?.['score-part']);
   const partNames = partList.map((p: any) => String(p['part-name'] ?? '').toLowerCase());
 
   const tempo = findTempo(doc);

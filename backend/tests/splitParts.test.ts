@@ -146,8 +146,7 @@ describe('splitToMidis – validation errors', () => {
     await expect(splitToMidis(id, p)).rejects.toThrow(/score-timewise/i);
   });
 
-  it('throws when part count is neither 2 nor 4', async () => {
-    // Three parts: should be rejected by the 2-or-4 validator.
+  it('throws with SAT diagnosis when 3 parts named S/A/T (no bass)', async () => {
     const xml =
       '<?xml version="1.0"?><score-partwise>' +
       '<part-list>' +
@@ -160,7 +159,63 @@ describe('splitToMidis – validation errors', () => {
       '<part id="P3"><measure number="1"><note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
       '</score-partwise>';
     const p = writeTmp(xml, '.xml');
-    const id = jobId('threeparts');
-    await expect(splitToMidis(id, p)).rejects.toThrow(/found 3/);
+    const id = jobId('threeparts-sat');
+    await expect(splitToMidis(id, p)).rejects.toThrow(/SAT.*missing.*bass/i);
+  });
+
+  it('throws with SAB diagnosis when 3 parts named S/A/B (no tenor)', async () => {
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Soprano</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Alto</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Bass</part-name></score-part>' +
+      '</part-list>' +
+      '<part id="P1"><measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P2"><measure number="1"><note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P3"><measure number="1"><note><pitch><step>E</step><octave>3</octave></pitch><duration>1</duration></note></measure></part>' +
+      '</score-partwise>';
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('threeparts-sab');
+    await expect(splitToMidis(id, p)).rejects.toThrow(/SAB.*no tenor|tenor.*not yet/i);
+  });
+
+  it('throws with vocal+piano diagnosis when 3 parts include a piano grand staff', async () => {
+    // 2 vocal staves + 1 piano part (2 staves declared via <staves>2</staves>).
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Voice</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Voice</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Piano</part-name></score-part>' +
+      '</part-list>' +
+      '<part id="P1"><measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P2"><measure number="1"><note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P3"><measure number="1"><attributes><staves>2</staves></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '</score-partwise>';
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('threeparts-vocalpiano');
+    await expect(splitToMidis(id, p)).rejects.toThrow(/vocal.*piano|piano accompaniment/i);
+  });
+
+  it('throws with generic listing when part count is unusual (5 parts)', async () => {
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Flute</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Oboe</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Clarinet</part-name></score-part>' +
+      '<score-part id="P4"><part-name>Horn</part-name></score-part>' +
+      '<score-part id="P5"><part-name>Bassoon</part-name></score-part>' +
+      '</part-list>' +
+      '<part id="P1"><measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P2"><measure number="1"><note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P3"><measure number="1"><note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P4"><measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P5"><measure number="1"><note><pitch><step>F</step><octave>3</octave></pitch><duration>1</duration></note></measure></part>' +
+      '</score-partwise>';
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('fiveparts');
+    await expect(splitToMidis(id, p)).rejects.toThrow(/found 5 parts.*Flute.*Oboe/);
   });
 });
