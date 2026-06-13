@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { v4 as uuidv4 } from 'uuid';
 
 import { createApp } from '../../src/app';
 import { createJob, updateJob } from '../../src/jobs/jobQueue';
@@ -16,14 +17,20 @@ import { createJob, updateJob } from '../../src/jobs/jobQueue';
 const app = createApp();
 
 describe('GET /status/:jobId', () => {
-  it('returns 404 for an unknown jobId', async () => {
-    const res = await request(app).get('/status/does-not-exist');
+  it('returns 400 for a malformed (non-uuid) jobId', async () => {
+    const res = await request(app).get('/status/not-a-uuid');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid jobId/i);
+  });
+
+  it('returns 404 for an unknown (well-formed) jobId', async () => {
+    const res = await request(app).get(`/status/${uuidv4()}`);
     expect(res.status).toBe(404);
     expect(res.body).toHaveProperty('error');
   });
 
   it('returns the job record for a known jobId', async () => {
-    const jobId = `test-status-${process.pid}-${Date.now()}`;
+    const jobId = uuidv4();
     createJob(jobId);
     updateJob(jobId, { status: 'rendering' });
 

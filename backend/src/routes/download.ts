@@ -5,8 +5,13 @@ import archiver from 'archiver';
 import { getJob } from '../jobs/jobQueue';
 import type { Voice } from '../utils/paths';
 import { mp3PathFor, VOICES } from '../utils/paths';
+import { validateJobIdParam } from '../middleware/validateJobIdParam';
 
 const router = Router();
+
+// Reject malformed jobIds (e.g. path traversal, oversized strings) before any
+// filesystem helper runs.
+router.param('jobId', validateJobIdParam);
 
 /**
  * GET /download/:jobId/all

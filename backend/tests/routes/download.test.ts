@@ -14,6 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import request from 'supertest';
 import AdmZip from 'adm-zip';
+import { v4 as uuidv4 } from 'uuid';
 
 import { createApp } from '../../src/app';
 import { createJob, updateJob } from '../../src/jobs/jobQueue';
@@ -30,8 +31,10 @@ const app = createApp();
 
 const createdJobIds = new Set<string>();
 
-function jobId(suffix: string): string {
-  const id = `test-dl-${suffix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function jobId(_suffix: string): string {
+  // jobIds must pass the uuid-v4 validator on the route, so we mint real ones.
+  // The suffix arg is preserved for readability at call sites but unused.
+  const id = uuidv4();
   createdJobIds.add(id);
   return id;
 }
@@ -57,6 +60,12 @@ afterEach(() => {
 });
 
 describe('GET /download/:jobId/:part', () => {
+  it('returns 400 for a malformed (non-uuid) jobId', async () => {
+    const res = await request(app).get('/download/not-a-uuid/soprano');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid jobId/i);
+  });
+
   it('returns 400 for an invalid part name', async () => {
     const id = jobId('badpart');
     createJob(id);
@@ -67,8 +76,8 @@ describe('GET /download/:jobId/:part', () => {
     expect(res.body.error).toMatch(/Invalid part/i);
   });
 
-  it('returns 404 for an unknown jobId', async () => {
-    const res = await request(app).get('/download/no-such-job/soprano');
+  it('returns 404 for an unknown (well-formed) jobId', async () => {
+    const res = await request(app).get(`/download/${uuidv4()}/soprano`);
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/Job not found/i);
   });
@@ -114,6 +123,12 @@ describe('GET /download/:jobId/:part', () => {
 });
 
 describe('GET /download/:jobId/all', () => {
+  it('returns 400 for a malformed (non-uuid) jobId', async () => {
+    const res = await request(app).get('/download/not-a-uuid/all');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid jobId/i);
+  });
+
   it('returns 409 when the job is not done', async () => {
     const id = jobId('all-notdone');
     createJob(id);
