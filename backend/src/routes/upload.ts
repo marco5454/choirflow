@@ -6,6 +6,7 @@ import path from 'path';
 import { UPLOADS_DIR } from '../utils/paths';
 import { createJob } from '../jobs/jobQueue';
 import { runPipeline } from '../jobs/worker';
+import { validateUploadContent } from '../middleware/validateUploadContent';
 
 const ALLOWED_EXT = new Set(['.xml', '.musicxml', '.mxl', '.pdf']);
 
@@ -34,7 +35,7 @@ const upload = multer({
 
 const router = Router();
 
-router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
+router.post('/upload', upload.single('file'), validateUploadContent, (req: Request, res: Response) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded. Use form field "file".' });
   }

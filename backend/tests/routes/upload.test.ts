@@ -117,8 +117,8 @@ describe('POST /upload', () => {
   });
 
   it('accepts a valid .pdf upload and returns 201 (worker mocked, OMR not run)', async () => {
-    // %PDF-1.4 header is the bare minimum a PDF "looks like"; the route only
-    // checks extension, and the worker is mocked.
+    // %PDF-1.4 header is needed both for the multer ext filter and for the
+    // content-sniff middleware. The worker is mocked so OMR doesn't run.
     const fakePdf = Buffer.from('%PDF-1.4\n%fake\n', 'utf8');
     const res = await request(app)
       .post('/upload')
@@ -132,5 +132,17 @@ describe('POST /upload', () => {
 
     expect(runPipeline).toHaveBeenCalledTimes(1);
     expect(runPipeline).toHaveBeenCalledWith(res.body.jobId);
+  });
+
+  it('rejects a renamed payload (PDF bytes uploaded as .xml) with 400', async () => {
+    // The extension passes multer's filter, but the sniff middleware should
+    // see %PDF- bytes and refuse with 400. The worker must not be invoked.
+    const res = await request(app)
+      .post('/upload')
+      .attach('file', Buffer.from('%PDF-1.4\n%fake\n', 'utf8'), 'score.xml');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/does not match/i);
+    expect(runPipeline).not.toHaveBeenCalled();
   });
 });
