@@ -27,11 +27,18 @@ export async function preflight(): Promise<void> {
   console.log('[preflight] ffmpeg:    ', ffmpeg ?? 'NOT FOUND');
   console.log('[preflight] soundfont: ', soundfontPath, sfExists ? '(ok)' : '(MISSING)');
 
-  if (!fluid || !ffmpeg || !sfExists) {
+  if (!fluid || !ffmpeg) {
     console.warn(
-      '[preflight] WARNING: audio render dependencies incomplete. ' +
+      '[preflight] WARNING: audio render binaries missing. ' +
         'Jobs will fail at the rendering stage. ' +
-        'Install: sudo apt-get install -y fluidsynth ffmpeg fluid-soundfont-gm',
+        'Install: sudo apt-get install -y fluidsynth ffmpeg',
+    );
+  }
+  if (!sfExists) {
+    console.warn(
+      `[preflight] WARNING: soundfont not found at ${soundfontPath}. ` +
+        'The vendored GeneralUser-GS.sf2 should live at backend/assets/soundfonts/. ' +
+        'Re-clone the repo, or set SOUNDFONT_PATH to a valid .sf2 file.',
     );
   }
 }

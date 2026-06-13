@@ -10,7 +10,7 @@
  * no quoting issues, no shell injection).
  *
  * Configurable via env:
- *   SOUNDFONT_PATH  default: /usr/share/sounds/sf2/FluidR3_GM.sf2
+ *   SOUNDFONT_PATH  default: <repo>/backend/assets/soundfonts/GeneralUser-GS.sf2
  *   FLUIDSYNTH_BIN  default: fluidsynth
  *   FFMPEG_BIN      default: ffmpeg
  *   RENDER_SAMPLE_RATE  default: 44100
@@ -25,7 +25,24 @@ import { midiPathFor, mp3PathFor, outputDirFor, VOICES, Voice } from '../utils/p
 
 const execFileP = promisify(execFile);
 
-const SOUNDFONT_PATH = process.env.SOUNDFONT_PATH ?? '/usr/share/sounds/sf2/FluidR3_GM.sf2';
+// Vendored under backend/assets/soundfonts/ (committed to the repo, ~30 MB).
+// At runtime __dirname is either backend/src/pipeline (ts-node dev) or
+// backend/dist/pipeline (built). The vendored asset stays under backend/assets/
+// in BOTH cases (we don't copy it into dist/). Resolve by trying the dev
+// layout first, then the built layout.
+function resolveDefaultSoundfontPath(): string {
+  const candidates = [
+    path.resolve(__dirname, '..', '..', 'assets', 'soundfonts', 'GeneralUser-GS.sf2'), // dev: src/pipeline → backend/
+    path.resolve(__dirname, '..', '..', '..', 'assets', 'soundfonts', 'GeneralUser-GS.sf2'), // built: dist/pipeline → backend/
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  // Neither exists; return the dev-layout candidate so error messages are predictable.
+  return candidates[0];
+}
+
+const SOUNDFONT_PATH = process.env.SOUNDFONT_PATH ?? resolveDefaultSoundfontPath();
 const FLUIDSYNTH_BIN = process.env.FLUIDSYNTH_BIN ?? 'fluidsynth';
 const FFMPEG_BIN = process.env.FFMPEG_BIN ?? 'ffmpeg';
 const SAMPLE_RATE = Number(process.env.RENDER_SAMPLE_RATE ?? 44100);
