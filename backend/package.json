@@ -2,6 +2,7 @@
   "name": "choirflow-backend",
   "version": "0.0.1",
   "private": true,
+  "license": "MIT",
   "description": "ChoirFlow backend (MVP)",
   "main": "src/server.ts",
   "scripts": {
