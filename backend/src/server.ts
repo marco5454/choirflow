@@ -11,6 +11,7 @@ import { createApp } from './app';
 import { ensureBootDirs, sweepOldArtifacts, STORAGE_ROOT } from './utils/paths';
 import { preflight } from './utils/preflight';
 import { getCleanupDelayMs } from './jobs/cleanup';
+import { getUploadRateLimitConfig } from './middleware/uploadRateLimit';
 
 const PORT = Number(process.env.PORT) || 3000;
 const JOB_RETENTION_HOURS = Number(process.env.JOB_RETENTION_HOURS ?? 24);
@@ -41,5 +42,11 @@ app.listen(PORT, () => {
     console.log(`Per-job cleanup scheduled ${cleanupMs / 60000} min after completion.`);
   } else {
     console.log('Per-job runtime cleanup disabled (JOB_CLEANUP_AFTER_MINUTES=0).');
+  }
+  const rl = getUploadRateLimitConfig();
+  if (rl.max > 0) {
+    console.log(`Upload rate limit: ${rl.max} request(s) per ${rl.windowMs / 60000} min per IP.`);
+  } else {
+    console.log('Upload rate limit disabled (UPLOAD_RATE_MAX=0).');
   }
 });

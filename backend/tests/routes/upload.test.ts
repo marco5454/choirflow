@@ -15,6 +15,10 @@ import fs from 'fs';
 import path from 'path';
 import request from 'supertest';
 
+// Disable the upload rate limiter for this file's tests. Must be set before
+// createApp() is called, since the limiter reads env at construction time.
+vi.stubEnv('UPLOAD_RATE_MAX', '0');
+
 // Mock the worker BEFORE importing the app, so the route binds to the mock.
 vi.mock('../../src/jobs/worker', () => ({
   runPipeline: vi.fn(async () => {

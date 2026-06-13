@@ -13,6 +13,7 @@ import express from 'express';
 import uploadRouter from './routes/upload';
 import statusRouter from './routes/status';
 import downloadRouter from './routes/download';
+import { createUploadRateLimiter } from './middleware/uploadRateLimit';
 
 export function createApp(): express.Express {
   const app = express();
@@ -20,6 +21,9 @@ export function createApp(): express.Express {
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
+
+  // Rate limit only the upload endpoint (status/download are cheap reads).
+  app.use('/upload', createUploadRateLimiter());
 
   app.use(uploadRouter);
   app.use(statusRouter);
