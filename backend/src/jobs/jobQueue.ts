@@ -5,7 +5,8 @@
 
 export type JobStatus =
   | 'pending'    // file uploaded, waiting to be processed
-  | 'splitting'  // MuseScore CLI converting MusicXML → 4 MIDIs
+  | 'omr'        // Audiveris running OMR on a PDF upload (skipped for MusicXML uploads)
+  | 'splitting'  // splitter converting MusicXML → 4 MIDIs
   | 'rendering'  // FluidSynth + ffmpeg producing 4 MP3s
   | 'done'       // all 4 MP3s ready
   | 'failed';    // pipeline error; see `error` field

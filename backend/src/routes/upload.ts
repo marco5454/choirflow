@@ -6,7 +6,7 @@ import { UPLOADS_DIR } from '../utils/paths';
 import { createJob } from '../jobs/jobQueue';
 import { runPipeline } from '../jobs/worker';
 
-const ALLOWED_EXT = new Set(['.xml', '.musicxml', '.mxl']);
+const ALLOWED_EXT = new Set(['.xml', '.musicxml', '.mxl', '.pdf']);
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
@@ -21,11 +21,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB (covers PDF scans)
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!ALLOWED_EXT.has(ext)) {
-      return cb(new Error(`Unsupported file type: ${ext}. Expected .xml, .musicxml, or .mxl`));
+      return cb(new Error(`Unsupported file type: ${ext}. Expected .xml, .musicxml, .mxl, or .pdf`));
     }
     cb(null, true);
   },
