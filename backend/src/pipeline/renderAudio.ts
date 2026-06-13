@@ -21,7 +21,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import { midiPathFor, mp3PathFor, outputDirFor, VOICES, Voice } from '../utils/paths';
+import type { Voice } from '../utils/paths';
+import { midiPathFor, mp3PathFor, outputDirFor, VOICES } from '../utils/paths';
 
 const execFileP = promisify(execFile);
 

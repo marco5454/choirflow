@@ -1,8 +1,10 @@
-import { Router, Request, Response } from 'express';
+import type { Request, Response } from 'express';
+import { Router } from 'express';
 import fs from 'fs';
 import archiver from 'archiver';
 import { getJob } from '../jobs/jobQueue';
-import { mp3PathFor, VOICES, Voice } from '../utils/paths';
+import type { Voice } from '../utils/paths';
+import { mp3PathFor, VOICES } from '../utils/paths';
 
 const router = Router();
 

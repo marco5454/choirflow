@@ -17,10 +17,11 @@ import AdmZip from 'adm-zip';
 
 import { createApp } from '../../src/app';
 import { createJob, updateJob } from '../../src/jobs/jobQueue';
+import type {
+  Voice} from '../../src/utils/paths';
 import {
   OUTPUT_ROOT,
   VOICES,
-  Voice,
   mp3PathFor,
   outputDirFor,
 } from '../../src/utils/paths';

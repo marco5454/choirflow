@@ -27,7 +27,8 @@
 import fs from 'fs';
 import { XMLParser } from 'fast-xml-parser';
 import MidiWriter from 'midi-writer-js';
-import { midiPathFor, VOICES, Voice } from '../utils/paths';
+import type { Voice } from '../utils/paths';
+import { midiPathFor, VOICES } from '../utils/paths';
 import { loadMusicXmlText } from './readMusicXml';
 
 /**
@@ -97,15 +98,6 @@ export interface SplitResult {
 function ensureArray<T>(v: T | T[] | undefined): T[] {
   if (v === undefined || v === null) return [];
   return Array.isArray(v) ? v : [v];
-}
-
-function stepAlterOctaveToPitchName(step: string, alter: number, octave: number): string {
-  let accidental = '';
-  if (alter === 1) accidental = '#';
-  else if (alter === 2) accidental = '##';
-  else if (alter === -1) accidental = 'b';
-  else if (alter === -2) accidental = 'bb';
-  return `${step}${accidental}${octave}`;
 }
 
 const STEP_TO_SEMITONE: Record<string, number> = {

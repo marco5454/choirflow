@@ -68,8 +68,8 @@ export async function runOmr(jobId: string, pdfPath: string): Promise<OmrResult>
     pdfPath,
   ];
 
-  let stdout = '';
-  let stderr = '';
+  let stdout: string;
+  let stderr: string;
   try {
     const result = await execFileP(AUDIVERIS_BIN, args, {
       timeout: AUDIVERIS_TIMEOUT_MS,
@@ -85,16 +85,18 @@ export async function runOmr(jobId: string, pdfPath: string): Promise<OmrResult>
         `Audiveris binary not found at ${AUDIVERIS_BIN}. ` +
           'Install Audiveris 5.10+ (https://github.com/Audiveris/audiveris/releases) ' +
           'or set AUDIVERIS_BIN.',
+        { cause: err },
       );
     }
     if (e.killed && e.signal === 'SIGTERM') {
       throw new Error(
         `OMR timed out after ${AUDIVERIS_TIMEOUT_MS} ms. ` +
           'Try a smaller PDF, a higher-quality scan, or increase AUDIVERIS_TIMEOUT_MS.',
+        { cause: err },
       );
     }
     const tail = (e.stderr ?? e.stdout ?? e.message).split('\n').slice(-10).join('\n');
-    throw new Error(`Audiveris failed: ${tail}`);
+    throw new Error(`Audiveris failed: ${tail}`, { cause: err });
   }
 
   if (!fs.existsSync(expectedMxl)) {

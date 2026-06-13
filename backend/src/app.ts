@@ -8,7 +8,8 @@
  * tests (supertest binds to the returned `app` directly).
  */
 
-import express, { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
+import express from 'express';
 import uploadRouter from './routes/upload';
 import statusRouter from './routes/status';
 import downloadRouter from './routes/download';
@@ -25,7 +26,6 @@ export function createApp(): express.Express {
   app.use(downloadRouter);
 
   // Centralized error handler (catches multer errors, etc.)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(400).json({ error: err.message });
   });
