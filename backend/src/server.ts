@@ -11,6 +11,7 @@ import { createApp } from './app';
 import { ensureBootDirs, sweepOldArtifacts, STORAGE_ROOT } from './utils/paths';
 import { preflight } from './utils/preflight';
 import { getCleanupDelayMs } from './jobs/cleanup';
+import { getMaxConcurrency } from './jobs/jobRunner';
 import { getUploadRateLimitConfig } from './middleware/uploadRateLimit';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -49,4 +50,5 @@ app.listen(PORT, () => {
   } else {
     console.log('Upload rate limit disabled (UPLOAD_RATE_MAX=0).');
   }
+  console.log(`Job concurrency: max ${getMaxConcurrency()} parallel pipeline(s).`);
 });

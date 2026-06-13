@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { UPLOADS_DIR } from '../utils/paths';
 import { createJob } from '../jobs/jobQueue';
-import { runPipeline } from '../jobs/worker';
+import { enqueue } from '../jobs/jobRunner';
 import { validateUploadContent } from '../middleware/validateUploadContent';
 
 const ALLOWED_EXT = new Set(['.xml', '.musicxml', '.mxl', '.pdf']);
@@ -45,8 +45,9 @@ router.post('/upload', upload.single('file'), validateUploadContent, (req: Reque
   }
   const job = createJob(jobId);
 
-  // Fire-and-forget. Errors are captured inside runPipeline and written to the job.
-  void runPipeline(jobId);
+  // Hand off to the bounded-concurrency runner. Job stays `pending` until
+  // a slot is free; runPipeline takes over from there.
+  enqueue(jobId);
 
   return res.status(201).json({
     jobId: job.id,
