@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 const VOICES = ['soprano', 'alto', 'tenor', 'bass'] as const;
 type Voice = (typeof VOICES)[number];
 
-type JobStatus = 'pending' | 'splitting' | 'rendering' | 'done' | 'failed';
+type JobStatus = 'pending' | 'omr' | 'splitting' | 'rendering' | 'done' | 'failed';
 
 type StatusResponse = {
   jobId: string;
@@ -20,12 +20,13 @@ type UploadResponse = {
 };
 
 const POLL_INTERVAL_MS = 500;
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const ACCEPTED_EXTENSIONS = '.xml,.musicxml,.mxl';
-const ACCEPTED_EXT_SET = new Set(['.xml', '.musicxml', '.mxl']);
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const ACCEPTED_EXTENSIONS = '.xml,.musicxml,.mxl,.pdf';
+const ACCEPTED_EXT_SET = new Set(['.xml', '.musicxml', '.mxl', '.pdf']);
 
 const PROGRESS_STEPS: Array<{ key: Exclude<JobStatus, 'failed'>; label: string }> = [
   { key: 'pending', label: 'Queued' },
+  { key: 'omr', label: 'Reading PDF' },
   { key: 'splitting', label: 'Splitting' },
   { key: 'rendering', label: 'Rendering' },
   { key: 'done', label: 'Done' },
@@ -45,10 +46,10 @@ function humanSize(bytes: number): string {
 function validateFile(f: File): string | null {
   const ext = extOf(f.name);
   if (!ACCEPTED_EXT_SET.has(ext)) {
-    return `Unsupported file type "${ext || '(none)'}". Use .xml, .musicxml, or .mxl.`;
+    return `Unsupported file type "${ext || '(none)'}". Use .xml, .musicxml, .mxl, or .pdf.`;
   }
   if (f.size > MAX_UPLOAD_BYTES) {
-    return `File is ${humanSize(f.size)}, which exceeds the 25 MB limit.`;
+    return `File is ${humanSize(f.size)}, which exceeds the 50 MB limit.`;
   }
   if (f.size === 0) {
     return 'File is empty.';
@@ -217,7 +218,7 @@ function App() {
         <header className="mb-8">
           <h1 className="text-3xl font-bold tracking-tight">ChoirFlow</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Upload SATB sheet music (MusicXML) and get one practice MP3 per voice.
+            Upload SATB sheet music (MusicXML or PDF) and get one practice MP3 per voice.
           </p>
         </header>
 
@@ -254,7 +255,9 @@ function App() {
             <p className="text-sm text-slate-700">
               <span className="font-medium text-indigo-600">Click to browse</span> or drag a file here
             </p>
-            <p className="mt-1 text-xs text-slate-500">.xml, .musicxml, .mxl &middot; max 25 MB</p>
+            <p className="mt-1 text-xs text-slate-500">
+              .xml, .musicxml, .mxl, .pdf &middot; max 50 MB
+            </p>
           </div>
 
           <input
@@ -335,6 +338,11 @@ function App() {
 
             <div className="mt-4">
               <ProgressStepper status={status} />
+              {status === 'omr' && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Reading the PDF with optical music recognition. This can take a couple of minutes.
+                </p>
+              )}
             </div>
 
             {status === 'failed' && jobError && (
