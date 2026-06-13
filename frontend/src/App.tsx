@@ -9,6 +9,7 @@ type StatusResponse = {
   jobId: string;
   status: JobStatus;
   error?: string;
+  failedStage?: JobStatus;
 };
 
 type UploadResponse = {
@@ -65,6 +66,7 @@ function App() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<JobStatus | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
+  const [failedStage, setFailedStage] = useState<JobStatus | null>(null);
   const [originalName, setOriginalName] = useState<string | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
@@ -93,6 +95,7 @@ function App() {
         setStatus(data.status);
         if (data.status === 'failed') {
           setJobError(data.error ?? 'Job failed');
+          setFailedStage(data.failedStage ?? null);
           return;
         }
         if (data.status !== 'done') {
@@ -169,6 +172,7 @@ function App() {
     setSubmitting(true);
     setUploadError(null);
     setJobError(null);
+    setFailedStage(null);
     setJobId(null);
     setStatus(null);
     setOriginalName(null);
@@ -199,6 +203,7 @@ function App() {
     setJobId(null);
     setStatus(null);
     setJobError(null);
+    setFailedStage(null);
     setOriginalName(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -337,7 +342,7 @@ function App() {
             </div>
 
             <div className="mt-4">
-              <ProgressStepper status={status} />
+              <ProgressStepper status={status} failedStage={failedStage} />
               {status === 'omr' && (
                 <p className="mt-2 text-xs text-slate-500">
                   Reading the PDF with optical music recognition. This can take a couple of minutes.
@@ -375,49 +380,69 @@ function App() {
   );
 }
 
-function ProgressStepper({ status }: { status: JobStatus }) {
-  // Treat 'failed' as: every step before the failure is past, current is failed.
-  // We don't know exactly which step failed without more context, so just dim everything.
+function ProgressStepper({
+  status,
+  failedStage,
+}: {
+  status: JobStatus;
+  failedStage: JobStatus | null;
+}) {
   const failed = status === 'failed';
+  // When failed, the "current" step (red) is the stage that was active at failure.
+  // If the backend didn't tell us, fall back to dimming everything.
+  const failedIdx = failed
+    ? PROGRESS_STEPS.findIndex((s) => s.key === failedStage)
+    : -1;
   const currentIdx = failed
-    ? -1
+    ? failedIdx
     : PROGRESS_STEPS.findIndex((s) => s.key === status);
 
   return (
     <ol className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
       {PROGRESS_STEPS.map((step, i) => {
+        const isFailed = failed && i === currentIdx;
         const isCurrent = !failed && i === currentIdx;
-        const isPast = !failed && i < currentIdx;
-        const isFuture = failed || i > currentIdx;
-        return (
-          <li key={step.key} className="flex items-center gap-2">
-            {isCurrent ? (
-              <span
-                className="inline-block h-2 w-2 animate-pulse rounded-full bg-indigo-500"
-                aria-hidden
-              />
-            ) : (
-              <span
-                className={
-                  'inline-block h-2 w-2 rounded-full ' +
-                  (isPast ? 'bg-indigo-500' : 'bg-slate-300')
-                }
-                aria-hidden
-              />
-            )}
+        const isPast = i >= 0 && currentIdx >= 0 && i < currentIdx;
+        const isFuture = currentIdx === -1 || (i > currentIdx && !isFailed);
+
+        let dot: React.ReactNode;
+        if (isFailed) {
+          dot = (
+            <span
+              className="inline-block h-2 w-2 rounded-full bg-red-500"
+              aria-hidden
+            />
+          );
+        } else if (isCurrent) {
+          dot = (
+            <span
+              className="inline-block h-2 w-2 animate-pulse rounded-full bg-indigo-500"
+              aria-hidden
+            />
+          );
+        } else {
+          dot = (
             <span
               className={
-                isCurrent
-                  ? 'font-semibold text-slate-900'
-                  : isPast
-                  ? 'text-slate-700'
-                  : isFuture
-                  ? 'text-slate-400'
-                  : 'text-slate-500'
+                'inline-block h-2 w-2 rounded-full ' +
+                (isPast ? 'bg-indigo-500' : 'bg-slate-300')
               }
-            >
-              {step.label}
-            </span>
+              aria-hidden
+            />
+          );
+        }
+
+        let labelClass: string;
+        if (isFailed) labelClass = 'font-semibold text-red-700';
+        else if (isCurrent) labelClass = 'font-semibold text-slate-900';
+        else if (isPast) labelClass = 'text-slate-700';
+        else if (isFuture) labelClass = 'text-slate-400';
+        else labelClass = 'text-slate-500';
+
+        return (
+          <li key={step.key} className="flex items-center gap-2">
+            {dot}
+            <span className={labelClass}>{step.label}</span>
           </li>
         );
       })}
