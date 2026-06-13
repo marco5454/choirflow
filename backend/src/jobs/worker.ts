@@ -11,6 +11,7 @@
 
 import path from 'path';
 import { getJob, updateJob } from './jobQueue';
+import { scheduleCleanup, getCleanupDelayMs } from './cleanup';
 import { findUploadFor } from '../utils/paths';
 import { runOmr } from '../pipeline/runOmr';
 import { splitToMidis } from '../pipeline/splitParts';
@@ -49,5 +50,9 @@ export async function runPipeline(jobId: string): Promise<void> {
     const failedStage = getJob(jobId)?.status;
     console.error(`[job ${jobId}] pipeline failed at ${failedStage}:`, message);
     updateJob(jobId, { status: 'failed', error: message, failedStage });
+  } finally {
+    // Schedule artifact cleanup whether the job succeeded or failed.
+    // Reads the delay each time so env changes during long server runs are honoured.
+    scheduleCleanup(jobId, getCleanupDelayMs());
   }
 }

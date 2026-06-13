@@ -10,6 +10,7 @@
 import { createApp } from './app';
 import { ensureBootDirs, sweepOldArtifacts, STORAGE_ROOT } from './utils/paths';
 import { preflight } from './utils/preflight';
+import { getCleanupDelayMs } from './jobs/cleanup';
 
 const PORT = Number(process.env.PORT) || 3000;
 const JOB_RETENTION_HOURS = Number(process.env.JOB_RETENTION_HOURS ?? 24);
@@ -35,4 +36,10 @@ const app = createApp();
 app.listen(PORT, () => {
   console.log(`ChoirFlow backend listening on http://localhost:${PORT}`);
   console.log(`Storage root: ${STORAGE_ROOT}`);
+  const cleanupMs = getCleanupDelayMs();
+  if (cleanupMs > 0) {
+    console.log(`Per-job cleanup scheduled ${cleanupMs / 60000} min after completion.`);
+  } else {
+    console.log('Per-job runtime cleanup disabled (JOB_CLEANUP_AFTER_MINUTES=0).');
+  }
 });

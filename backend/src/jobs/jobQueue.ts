@@ -58,3 +58,11 @@ export function updateJob(
 export function listJobs(): Job[] {
   return Array.from(jobs.values());
 }
+
+/**
+ * Remove a job from the in-memory map. Idempotent.
+ * Used by the runtime cleanup scheduler once artifacts have been deleted.
+ */
+export function deleteJob(id: string): boolean {
+  return jobs.delete(id);
+}
