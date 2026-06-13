@@ -44,6 +44,46 @@ function humanSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+// Upload via XHR so we can observe upload progress events. fetch() can't.
+// Resolves with the parsed JSON body on 2xx, rejects with an Error otherwise.
+function uploadFileWithProgress(
+  file: File,
+  onProgress: (fraction: number) => void,
+): Promise<UploadResponse> {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('file', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload');
+    xhr.responseType = 'json';
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) {
+        onProgress(Math.min(1, e.loaded / e.total));
+      }
+    };
+    xhr.upload.onload = () => onProgress(1);
+
+    xhr.onload = () => {
+      const body: unknown = xhr.response;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as UploadResponse);
+      } else {
+        const errMsg =
+          (body && typeof body === 'object' && 'error' in body
+            ? String((body as { error: unknown }).error)
+            : null) ?? `upload failed (${xhr.status})`;
+        reject(new Error(errMsg));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.onabort = () => reject(new Error('Upload aborted'));
+
+    xhr.send(fd);
+  });
+}
+
 function validateFile(f: File): string | null {
   const ext = extOf(f.name);
   if (!ACCEPTED_EXT_SET.has(ext)) {
@@ -70,6 +110,7 @@ function App() {
   const [originalName, setOriginalName] = useState<string | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -176,16 +217,10 @@ function App() {
     setJobId(null);
     setStatus(null);
     setOriginalName(null);
+    setUploadProgress(0);
 
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/upload', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `upload failed (${res.status})`);
-      }
-      const data: UploadResponse = await res.json();
+      const data = await uploadFileWithProgress(file, setUploadProgress);
       setJobId(data.jobId);
       setStatus(data.status);
       setOriginalName(data.originalName ?? file.name);
@@ -193,6 +228,7 @@ function App() {
       setUploadError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
+      setUploadProgress(null);
     }
   };
 
@@ -205,6 +241,7 @@ function App() {
     setJobError(null);
     setFailedStage(null);
     setOriginalName(null);
+    setUploadProgress(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -368,6 +405,29 @@ function App() {
               </button>
             )}
           </div>
+
+          {submitting && uploadProgress !== null && (
+            <div className="mt-4">
+              <div
+                className="h-2 w-full overflow-hidden rounded-full bg-slate-200"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(uploadProgress * 100)}
+                aria-label="Upload progress"
+              >
+                <div
+                  className="h-full bg-indigo-500 transition-[width] duration-150"
+                  style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+                />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                {uploadProgress < 1
+                  ? `Uploading… ${Math.round(uploadProgress * 100)}%`
+                  : 'Upload complete, starting job…'}
+              </p>
+            </div>
+          )}
         </form>
 
         {uploadError && (
