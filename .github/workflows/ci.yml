@@ -34,6 +34,11 @@ jobs:
         working-directory: backend
         run: npx tsc --noEmit
 
+      - name: Install audio tooling (fluidsynth, ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fluidsynth ffmpeg
+
       - name: Backend - test
         working-directory: backend
         run: npm test
