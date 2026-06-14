@@ -40,8 +40,11 @@ export function uploadFileWithProgress(
   });
 }
 
-export async function fetchStatus(jobId: string): Promise<StatusResponse> {
-  const res = await fetch(`/status/${jobId}`);
+export async function fetchStatus(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<StatusResponse> {
+  const res = await fetch(`/status/${jobId}`, { signal });
   if (!res.ok) throw new Error(`status ${res.status}`);
   return (await res.json()) as StatusResponse;
 }

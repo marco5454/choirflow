@@ -49,6 +49,7 @@ export function useJobStatus(
     // Track terminal status inside the effect rather than via deps so the
     // effect mounts once per job, not once per status transition.
     let terminal = false;
+    const controller = new AbortController();
 
     const tick = async () => {
       if (cancelled || terminal) return;
@@ -57,7 +58,7 @@ export function useJobStatus(
         return;
       }
       try {
-        const data = await fetchStatus(jobId);
+        const data = await fetchStatus(jobId, controller.signal);
         if (cancelled) return;
         setState({
           status: data.status,
@@ -71,6 +72,8 @@ export function useJobStatus(
         timer = window.setTimeout(tick, POLL_INTERVAL_MS);
       } catch (err) {
         if (cancelled) return;
+        // Aborts are expected on cleanup; don't surface them as errors.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setState((prev) => ({
           ...prev,
           error: err instanceof Error ? err.message : String(err),
@@ -96,6 +99,7 @@ export function useJobStatus(
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      controller.abort();
     };
   }, [jobId]);
 
