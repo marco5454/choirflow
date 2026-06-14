@@ -87,7 +87,10 @@ npm run dev
 ```
 
 Open the frontend URL, drop a `.xml` / `.musicxml` / `.mxl` / `.pdf` file,
-and wait for the four-voice MP3 players to appear.
+and wait for the four-voice MP3 players to appear. Each MP3 contains all
+four voices, with the named voice prominent and the other three quieter —
+the standard choir-practice convention so a singer can rehearse their
+line in harmonic context.
 
 ## Tests
 
@@ -96,8 +99,9 @@ cd backend
 npm test
 ```
 
-(95 vitest cases covering MusicXML loading, SATB voice splitting, the job
-queue, route handlers, middleware, and utilities.)
+(96 vitest cases covering MusicXML loading, SATB voice splitting, the job
+queue, route handlers, middleware, utilities, and an end-to-end pipeline
+integration test that exercises the real fluidsynth + ffmpeg toolchain.)
 
 ## Build (production-ish)
 
@@ -148,6 +152,8 @@ All optional; sensible defaults in code.
 | `AUDIVERIS_TIMEOUT_MS`         | `180000`                                                  | Hard timeout for a single Audiveris run                  |
 | `RENDER_SAMPLE_RATE`           | `44100`                                                   | WAV sample rate                                          |
 | `RENDER_MP3_QSCALE`            | `4`                                                       | libmp3lame VBR quality (0=best)                          |
+| `MIX_PROMINENT_DB`             | `-3`                                                      | dB applied to the prominent voice in each mix            |
+| `MIX_BACKGROUND_DB`            | `-15`                                                     | dB applied to each background voice in each mix          |
 
 ---
 
