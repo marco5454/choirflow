@@ -180,26 +180,8 @@ describe('splitToMidis – validation errors', () => {
     await expect(splitToMidis(id, p)).rejects.toThrow(/SAB.*no tenor|tenor.*not yet/i);
   });
 
-  it('throws with vocal+piano diagnosis when 3 parts include a piano grand staff', async () => {
-    // 2 vocal staves + 1 piano part (2 staves declared via <staves>2</staves>).
-    const xml =
-      '<?xml version="1.0"?><score-partwise>' +
-      '<part-list>' +
-      '<score-part id="P1"><part-name>Voice</part-name></score-part>' +
-      '<score-part id="P2"><part-name>Voice</part-name></score-part>' +
-      '<score-part id="P3"><part-name>Piano</part-name></score-part>' +
-      '</part-list>' +
-      '<part id="P1"><measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note></measure></part>' +
-      '<part id="P2"><measure number="1"><note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
-      '<part id="P3"><measure number="1"><attributes><staves>2</staves></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
-      '</score-partwise>';
-    const p = writeTmp(xml, '.xml');
-    const id = jobId('threeparts-vocalpiano');
-    await expect(splitToMidis(id, p)).rejects.toThrow(/vocal.*piano|piano accompaniment/i);
-  });
-
   it('throws with generic listing when part count is unusual (5 parts)', async () => {
-    const xml =
+      const xml =
       '<?xml version="1.0"?><score-partwise>' +
       '<part-list>' +
       '<score-part id="P1"><part-name>Flute</part-name></score-part>' +
@@ -217,5 +199,184 @@ describe('splitToMidis – validation errors', () => {
     const p = writeTmp(xml, '.xml');
     const id = jobId('fiveparts');
     await expect(splitToMidis(id, p)).rejects.toThrow(/found 5 parts.*Flute.*Oboe/);
+  });
+
+  it('throws when only 1 vocal part remains after piano-like parts are filtered out', async () => {
+    // 1 vocal + 1 piano: vocal count = 1, which is not a supported SATB shape.
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Voice</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Piano</part-name></score-part>' +
+      '</part-list>' +
+      '<part id="P1"><measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P2"><measure number="1"><attributes><staves>2</staves></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '</score-partwise>';
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('onevocal-piano');
+    await expect(splitToMidis(id, p)).rejects.toThrow(/piano accompaniment.*not.*standard SATB/i);
+  });
+});
+
+describe('splitToMidis – vocal + piano accompaniment', () => {
+  /**
+   * Build a MusicXML score with `vocalParts` single-staff vocal parts followed
+   * by a 2-staff piano part. The piano is in a different pitch register (C2)
+   * so we can verify those pitches do NOT appear in the SATB output.
+   */
+  function vocalPlusPianoXml(vocalPitches: { step: string; octave: number; name: string }[]): string {
+    const vocalPartsXml = vocalPitches
+      .map(
+        (v, i) =>
+          `<part id="P${i + 1}"><measure number="1">` +
+          `<attributes><divisions>1</divisions></attributes>` +
+          `<note><pitch><step>${v.step}</step><octave>${v.octave}</octave></pitch><duration>1</duration></note>` +
+          `</measure></part>`,
+      )
+      .join('');
+
+    const pianoId = `P${vocalPitches.length + 1}`;
+    // Piano grand staff: <staves>2</staves>, with notes on staff 1 (C2) and staff 2 (C2).
+    const pianoXml =
+      `<part id="${pianoId}"><measure number="1">` +
+      `<attributes><divisions>1</divisions><staves>2</staves></attributes>` +
+      `<note><pitch><step>C</step><octave>2</octave></pitch><duration>1</duration><staff>1</staff></note>` +
+      `<backup><duration>1</duration></backup>` +
+      `<note><pitch><step>C</step><octave>2</octave></pitch><duration>1</duration><staff>2</staff></note>` +
+      `</measure></part>`;
+
+    const scoreParts = vocalPitches
+      .map((v, i) => `<score-part id="P${i + 1}"><part-name>${v.name}</part-name></score-part>`)
+      .join('');
+
+    return (
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      scoreParts +
+      `<score-part id="${pianoId}"><part-name>Piano</part-name></score-part>` +
+      '</part-list>' +
+      vocalPartsXml +
+      pianoXml +
+      '</score-partwise>'
+    );
+  }
+
+  it('renders 4 vocal parts + piano as open-score SATB, dropping the piano', async () => {
+    const xml = vocalPlusPianoXml([
+      { step: 'C', octave: 5, name: 'Soprano' },
+      { step: 'G', octave: 4, name: 'Alto' },
+      { step: 'E', octave: 4, name: 'Tenor' },
+      { step: 'C', octave: 4, name: 'Bass' },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('open-piano');
+
+    const result = await splitToMidis(id, p);
+
+    // partNames in result reflect only the vocal parts (piano dropped).
+    expect(result.partNames).toEqual(['soprano', 'alto', 'tenor', 'bass']);
+
+    const sop = noteOnNames(parseMidiFile(midiPathFor(id, 'soprano')));
+    const alt = noteOnNames(parseMidiFile(midiPathFor(id, 'alto')));
+    const ten = noteOnNames(parseMidiFile(midiPathFor(id, 'tenor')));
+    const bas = noteOnNames(parseMidiFile(midiPathFor(id, 'bass')));
+
+    expect(sop).toEqual(['C5']);
+    expect(alt).toEqual(['G4']);
+    expect(ten).toEqual(['E4']);
+    expect(bas).toEqual(['C4']);
+
+    // Piano was at C2 — confirm none of the SATB tracks contain that pitch.
+    for (const v of VOICES) {
+      const notes = noteOnNames(parseMidiFile(midiPathFor(id, v)));
+      expect(notes).not.toContain('C2');
+    }
+  });
+
+  it('renders 2 vocal parts + piano as closed-score SATB, dropping the piano', async () => {
+    // Two vocal parts with explicit clefs: treble (S+A) and bass (T+B). Each part
+    // has one chord (two pitches) to exercise the chord-pair voice split.
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Women</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Men</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Piano</part-name></score-part>' +
+      '</part-list>' +
+      // Treble staff: C5 (S) over G4 (A).
+      '<part id="P1"><measure number="1">' +
+      '<attributes><divisions>1</divisions><clef><sign>G</sign><line>2</line></clef></attributes>' +
+      '<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note>' +
+      '<note><chord/><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration></note>' +
+      '</measure></part>' +
+      // Bass staff: E4 (T) over C4 (B). (Tenor written at sounding pitch for simplicity.)
+      '<part id="P2"><measure number="1">' +
+      '<attributes><divisions>1</divisions><clef><sign>F</sign><line>4</line></clef></attributes>' +
+      '<note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration></note>' +
+      '<note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>' +
+      '</measure></part>' +
+      // Piano part (2 staves) — should be dropped.
+      '<part id="P3"><measure number="1">' +
+      '<attributes><divisions>1</divisions><staves>2</staves></attributes>' +
+      '<note><pitch><step>C</step><octave>2</octave></pitch><duration>1</duration><staff>1</staff></note>' +
+      '<backup><duration>1</duration></backup>' +
+      '<note><pitch><step>C</step><octave>2</octave></pitch><duration>1</duration><staff>2</staff></note>' +
+      '</measure></part>' +
+      '</score-partwise>';
+
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('closed-piano');
+
+    const result = await splitToMidis(id, p);
+
+    expect(result.partNames).toEqual(['women', 'men']);
+
+    const sop = noteOnNames(parseMidiFile(midiPathFor(id, 'soprano')));
+    const alt = noteOnNames(parseMidiFile(midiPathFor(id, 'alto')));
+    const ten = noteOnNames(parseMidiFile(midiPathFor(id, 'tenor')));
+    const bas = noteOnNames(parseMidiFile(midiPathFor(id, 'bass')));
+
+    expect(sop).toEqual(['C5']);
+    expect(alt).toEqual(['G4']);
+    expect(ten).toEqual(['E4']);
+    expect(bas).toEqual(['C4']);
+
+    // Piano C2 must not leak in.
+    for (const v of VOICES) {
+      const notes = noteOnNames(parseMidiFile(midiPathFor(id, v)));
+      expect(notes).not.toContain('C2');
+    }
+  });
+
+  it('detects a part as piano via <staves>2</staves> even when not named "piano"', async () => {
+    // 4 vocal parts + 1 unnamed 2-staff part. The unnamed part should be
+    // classified as piano-like (via staff count) and dropped, leaving open4.
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Soprano</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Alto</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Tenor</part-name></score-part>' +
+      '<score-part id="P4"><part-name>Bass</part-name></score-part>' +
+      '<score-part id="P5"><part-name>Reduction</part-name></score-part>' +
+      '</part-list>' +
+      '<part id="P1"><measure number="1"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P2"><measure number="1"><note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P3"><measure number="1"><note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P4"><measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part>' +
+      '<part id="P5"><measure number="1">' +
+      '<attributes><divisions>1</divisions><staves>2</staves></attributes>' +
+      '<note><pitch><step>C</step><octave>2</octave></pitch><duration>1</duration><staff>1</staff></note>' +
+      '<backup><duration>1</duration></backup>' +
+      '<note><pitch><step>C</step><octave>2</octave></pitch><duration>1</duration><staff>2</staff></note>' +
+      '</measure></part>' +
+      '</score-partwise>';
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('open-unnamed-piano');
+
+    await splitToMidis(id, p);
+    const sop = noteOnNames(parseMidiFile(midiPathFor(id, 'soprano')));
+    expect(sop).toEqual(['C5']);
+    expect(noteOnNames(parseMidiFile(midiPathFor(id, 'bass')))).toEqual(['C4']);
   });
 });

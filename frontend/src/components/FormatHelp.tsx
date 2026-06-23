@@ -21,6 +21,11 @@ export function FormatHelp() {
               the top staff, Tenor + Bass sharing the bottom staff (2 staves total). Common in
               hymnals.
             </li>
+            <li>
+              <span className="font-medium">With piano accompaniment</span> &mdash; either of
+              the above plus a piano part. The piano is dropped and only the four vocal lines
+              are rendered.
+            </li>
           </ul>
         </div>
 

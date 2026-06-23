@@ -8,6 +8,10 @@
  *      produced by music21 / MuseScore "closed score" / hymnal exports) or via
  *      explicit <voice>1</voice>/<voice>2</voice> with <backup>.
  *
+ * Either of the above may additionally include piano accompaniment parts
+ * (identified by part-name / instrument-name / >=2 staves). Piano parts are
+ * dropped; only the vocal parts are rendered.
+ *
  * Voice-split heuristic for closed score:
  *   - When a beat has multiple notes via <chord>: highest pitch -> upper voice
  *     (Soprano / Tenor), lowest pitch -> lower voice (Alto / Bass). Chords with
@@ -580,7 +584,17 @@ function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
  *   partList:  the <score-part> elements (with part-name, score-instrument)
  *   partsXml:  the <part> elements (whose <attributes><staves> matter)
  */
-function diagnosePartLayout(partList: any[], partsXml: any[]): string {
+interface PartLayoutInfo {
+  partNames: string[];
+  lowerNames: string[];
+  instrumentNames: string[];
+  staffCounts: number[];
+  pianoIdx: number[];
+  vocalIdx: number[];
+  found: string;
+}
+
+function inspectPartLayout(partList: any[], partsXml: any[]): PartLayoutInfo {
   const partNames = partList.map((p: any) => String(p?.['part-name'] ?? '').trim());
   const lowerNames = partNames.map((n) => n.toLowerCase());
   const instrumentNames = partList.map((p: any) =>
@@ -597,24 +611,75 @@ function diagnosePartLayout(partList: any[], partsXml: any[]): string {
     return Number.isFinite(n) && n > 0 ? n : 1;
   });
 
+  // A part is "piano-like" if its name/instrument matches a keyboard token, OR
+  // if it declares >=2 staves (piano grand staff).
   const isPianoLike = (i: number): boolean =>
-    /piano|keyboard|organ|grand/i.test(lowerNames[i] ?? '') ||
+    /piano|keyboard|organ|grand|accomp/i.test(lowerNames[i] ?? '') ||
     /piano|keyboard|organ|grand/i.test(instrumentNames[i] ?? '') ||
     staffCounts[i] >= 2;
 
-  const pianoIdx = staffCounts.map((_, i) => (isPianoLike(i) ? i : -1)).filter((i) => i >= 0);
+  const pianoIdx: number[] = [];
+  const vocalIdx: number[] = [];
+  for (let i = 0; i < partsXml.length; i++) {
+    if (isPianoLike(i)) pianoIdx.push(i);
+    else vocalIdx.push(i);
+  }
 
-  // Format a "found N parts: ..." listing for inclusion in any message.
   const found = `found ${partsXml.length} parts (${partNames
     .map((n, i) => `"${n || '(unnamed)'}"${staffCounts[i] >= 2 ? ` [${staffCounts[i]} staves]` : ''}`)
     .join(', ')})`;
 
-  // Case 1: vocal + piano accompaniment (any part looks like piano).
-  if (pianoIdx.length > 0 && partsXml.length !== 2 && partsXml.length !== 4) {
+  return { partNames, lowerNames, instrumentNames, staffCounts, pianoIdx, vocalIdx, found };
+}
+
+/**
+ * Classify the score into a supported shape (or unsupported with a reason).
+ *
+ * Supported shapes:
+ *   - open4:           4 vocal parts, no piano. Document order = S/A/T/B.
+ *   - closed2:         2 vocal parts (treble + bass), no piano.
+ *   - vocalPlusPiano:  4 or 2 vocal parts + 1+ piano-like parts. Piano dropped.
+ *
+ * Anything else → unsupported with a user-facing message from diagnosePartLayout().
+ */
+type ScoreShape =
+  | { kind: 'open4'; vocalIdx: number[] }
+  | { kind: 'closed2'; vocalIdx: number[] }
+  | { kind: 'unsupported'; message: string };
+
+function classifyScore(info: PartLayoutInfo, partsXml: any[]): ScoreShape {
+  const vocalCount = info.vocalIdx.length;
+  const pianoCount = info.pianoIdx.length;
+
+  // Pure SATB shapes (no piano).
+  if (pianoCount === 0 && vocalCount === 4) {
+    return { kind: 'open4', vocalIdx: info.vocalIdx };
+  }
+  if (pianoCount === 0 && vocalCount === 2) {
+    return { kind: 'closed2', vocalIdx: info.vocalIdx };
+  }
+
+  // Vocal + piano accompaniment.
+  if (pianoCount >= 1 && vocalCount === 4) {
+    return { kind: 'open4', vocalIdx: info.vocalIdx };
+  }
+  if (pianoCount >= 1 && vocalCount === 2) {
+    return { kind: 'closed2', vocalIdx: info.vocalIdx };
+  }
+
+  return { kind: 'unsupported', message: diagnosePartLayout(info, partsXml) };
+}
+
+function diagnosePartLayout(info: PartLayoutInfo, partsXml: any[]): string {
+  const { lowerNames, pianoIdx, found } = info;
+
+  // Case 1: vocal + piano accompaniment with an unsupported vocal-part count.
+  // (Supported vocal-part counts of 2 and 4 are handled by classifyScore above.)
+  if (pianoIdx.length > 0) {
     return (
-      `This score looks like a vocal + piano accompaniment, not an SATB choir score: ${found}. ` +
-      `ChoirFlow currently supports only standard SATB scores ` +
-      `(4 separate vocal staves, or 2 staves with women on treble + men on bass).`
+      `This score has piano accompaniment but the vocal staves do not form a standard SATB layout: ${found}. ` +
+      `ChoirFlow supports vocal + piano scores when the vocal section has either ` +
+      `4 separate staves (S, A, T, B) or 2 staves (women on treble + men on bass).`
     );
   }
 
@@ -711,12 +776,34 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
       'MusicXML contains no <part> elements. The score appears to be empty.',
     );
   }
-  if (partsXml.length !== 2 && partsXml.length !== 4) {
-    throw new MusicXmlValidationError(diagnosePartLayout(partList, partsXml));
+
+  const layoutInfo = inspectPartLayout(partList, partsXml);
+  const shape = classifyScore(layoutInfo, partsXml);
+  if (shape.kind === 'unsupported') {
+    throw new MusicXmlValidationError(shape.message);
+  }
+  if (layoutInfo.pianoIdx.length > 0) {
+    logger.info(
+      {
+        jobId,
+        droppedPianoParts: layoutInfo.pianoIdx.map((i) => ({
+          index: i,
+          name: layoutInfo.partNames[i] || null,
+          staves: layoutInfo.staffCounts[i],
+        })),
+      },
+      'dropping piano accompaniment parts; rendering vocal staves only',
+    );
   }
 
-  // Verify at least one part has at least one note.
-  const totalNotes = partsXml.reduce(
+  // From here on we operate on vocal parts only. Build parallel arrays
+  // restricted to vocalIdx so the downstream open/closed-score logic is
+  // unchanged regardless of whether piano parts were present.
+  const vocalPartsXml = shape.vocalIdx.map((i) => partsXml[i]);
+  const vocalPartNames = shape.vocalIdx.map((i) => layoutInfo.partNames[i]?.toLowerCase() ?? '');
+
+  // Verify at least one vocal part has at least one note.
+  const totalNotes = vocalPartsXml.reduce(
     (sum: number, p: any) =>
       sum +
       ensureArray(p.measure).reduce((s: number, m: any) => s + ensureArray(m.note).length, 0),
@@ -729,16 +816,15 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
   }
 
   // Graft document-ordered children onto each <measure>._ordered.
+  // (Done over the full doc — vocal parts share references with structuredDoc.)
   attachOrderedMeasureChildren(doc, docOrdered);
-
-  const partNames = partList.map((p: any) => String(p['part-name'] ?? '').toLowerCase());
 
   const tempo = findTempo(doc);
 
-  // Parse each <part> into RawEvents.
-  const parsedParts: ParsedPart[] = partsXml.map((p: any, i: number) => {
-    const parsed = parsePartRaw(p, jobId, partNames[i] ?? `part${i + 1}`);
-    parsed.partName = partNames[i] ?? '';
+  // Parse each vocal <part> into RawEvents.
+  const parsedParts: ParsedPart[] = vocalPartsXml.map((p: any, i: number) => {
+    const parsed = parsePartRaw(p, jobId, vocalPartNames[i] ?? `part${i + 1}`);
+    parsed.partName = vocalPartNames[i] ?? '';
     parsed.clef = detectClef(p);
     return parsed;
   });
@@ -746,14 +832,14 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
   const midiPaths = {} as Record<Voice, string>;
   let voiceNotesByOutput: Record<Voice, VoiceNote[]>;
 
-  if (partsXml.length === 4) {
+  if (shape.kind === 'open4') {
     // Open-score path. Trust S/A/T/B order; warn on mismatched names.
     const expected = ['soprano', 'alto', 'tenor', 'bass'];
     for (let i = 0; i < 4; i++) {
-      const name = partNames[i] ?? '';
+      const name = vocalPartNames[i] ?? '';
       if (name && !name.includes(expected[i])) {
         logger.warn(
-          { jobId, partIndex: i, name, expected: expected[i] },
+          { jobId, partIndex: shape.vocalIdx[i], name, expected: expected[i] },
           'part name does not match expected SATB position; assuming S/A/T/B order anyway',
         );
       }
@@ -830,5 +916,5 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
     midiPaths[voice] = outPath;
   }
 
-  return { tempo, partNames, midiPaths };
+  return { tempo, partNames: vocalPartNames, midiPaths };
 }
