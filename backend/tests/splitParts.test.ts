@@ -816,3 +816,192 @@ describe('splitToMidis – articulation gap between consecutive notes', () => {
     expect(firstOff!.tick - firstOn!.tick).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('splitToMidis – leading-silence trim across all voices', () => {
+  // Default articulation gap = 8 ticks at 120 BPM / 128 ppq (same as the
+  // articulation-gap describe block above). The trim shaves the *common*
+  // leading silence; the articulation gap still applies on top of any
+  // notes that follow.
+  const ARTIC_GAP = 8;
+
+  /**
+   * Four-part XML where each part is composed of `leadingRestQuarters`
+   * quarter rests followed by `noteQuarters` quarter notes of one pitch.
+   * Divisions=1 → 128 ticks per quarter.
+   */
+  function withLeadingRestsXml(
+    parts: Array<{
+      name: string;
+      step: string;
+      octave: number;
+      leadingRestQuarters: number;
+      noteQuarters: number;
+    }>,
+  ): string {
+    const partList = parts
+      .map((p, i) => `<score-part id="P${i + 1}"><part-name>${p.name}</part-name></score-part>`)
+      .join('');
+    const partBodies = parts
+      .map((p, i) => {
+        let body = `<attributes><divisions>1</divisions></attributes>`;
+        for (let n = 0; n < p.leadingRestQuarters; n++) {
+          body += `<note><rest/><duration>1</duration></note>`;
+        }
+        for (let n = 0; n < p.noteQuarters; n++) {
+          body += `<note><pitch><step>${p.step}</step><octave>${p.octave}</octave></pitch><duration>1</duration></note>`;
+        }
+        return `<part id="P${i + 1}"><measure number="1">${body}</measure></part>`;
+      })
+      .join('');
+    return `<?xml version="1.0"?><score-partwise><part-list>${partList}</part-list>${partBodies}</score-partwise>`;
+  }
+
+  /**
+   * Tick of the first note-on in a MIDI file. Throws if the file has no
+   * note-on events — caller should only use this on voices with notes.
+   */
+  function firstNoteOnTick(filePath: string): number {
+    const m = parseMidiFile(filePath);
+    const on = m.events.find((e) => e.type === 'on');
+    if (!on) throw new Error(`no note-on found in ${filePath}`);
+    return on.tick;
+  }
+
+  it('shifts a late-entering voice to start at t=0 when all voices share leading rests', async () => {
+    // Soprano enters at the start. Alto/Tenor/Bass each wait 4 quarter notes
+    // (4 * 128 = 512 ticks). Soprano's leading rest = 0, so the common trim
+    // is 0 ticks. After trim, Soprano starts at 0, and ATB still start at
+    // 512 ticks (their offset is preserved).
+    const xml = withLeadingRestsXml([
+      { name: 'Soprano', step: 'C', octave: 5, leadingRestQuarters: 0, noteQuarters: 8 },
+      { name: 'Alto', step: 'G', octave: 4, leadingRestQuarters: 4, noteQuarters: 4 },
+      { name: 'Tenor', step: 'E', octave: 4, leadingRestQuarters: 4, noteQuarters: 4 },
+      { name: 'Bass', step: 'C', octave: 4, leadingRestQuarters: 4, noteQuarters: 4 },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('trim-shared-zero');
+    await splitToMidis(id, p);
+
+    expect(firstNoteOnTick(midiPathFor(id, 'soprano'))).toBe(0);
+    expect(firstNoteOnTick(midiPathFor(id, 'alto'))).toBe(512);
+    expect(firstNoteOnTick(midiPathFor(id, 'tenor'))).toBe(512);
+    expect(firstNoteOnTick(midiPathFor(id, 'bass'))).toBe(512);
+  });
+
+  it('trims a leading silence shared by ALL voices so the piece starts at t=0', async () => {
+    // All four voices have 2 quarter rests (256 ticks) before their first
+    // note. The common trim is 256 ticks. After trim every voice's first
+    // note-on lands at tick 0.
+    const xml = withLeadingRestsXml([
+      { name: 'Soprano', step: 'C', octave: 5, leadingRestQuarters: 2, noteQuarters: 4 },
+      { name: 'Alto', step: 'G', octave: 4, leadingRestQuarters: 2, noteQuarters: 4 },
+      { name: 'Tenor', step: 'E', octave: 4, leadingRestQuarters: 2, noteQuarters: 4 },
+      { name: 'Bass', step: 'C', octave: 4, leadingRestQuarters: 2, noteQuarters: 4 },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('trim-all');
+    await splitToMidis(id, p);
+
+    for (const v of VOICES) {
+      expect(firstNoteOnTick(midiPathFor(id, v))).toBe(0);
+    }
+  });
+
+  it('preserves relative alignment between voices when trimming the common silence', async () => {
+    // Soprano:   2 rest, then notes  (starts at 256)
+    // Alto:      4 rest, then notes  (starts at 512)
+    // Tenor:     6 rest, then notes  (starts at 768)
+    // Bass:      8 rest, then notes  (starts at 1024)
+    //
+    // Common trim = min(2,4,6,8) * 128 = 256 ticks. After trim:
+    //   Soprano starts at 0
+    //   Alto    starts at 256
+    //   Tenor   starts at 512
+    //   Bass    starts at 768
+    // i.e. each voice's relative offset from Soprano is preserved exactly.
+    const xml = withLeadingRestsXml([
+      { name: 'Soprano', step: 'C', octave: 5, leadingRestQuarters: 2, noteQuarters: 8 },
+      { name: 'Alto', step: 'G', octave: 4, leadingRestQuarters: 4, noteQuarters: 6 },
+      { name: 'Tenor', step: 'E', octave: 4, leadingRestQuarters: 6, noteQuarters: 4 },
+      { name: 'Bass', step: 'C', octave: 4, leadingRestQuarters: 8, noteQuarters: 2 },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('trim-relative');
+    await splitToMidis(id, p);
+
+    expect(firstNoteOnTick(midiPathFor(id, 'soprano'))).toBe(0);
+    expect(firstNoteOnTick(midiPathFor(id, 'alto'))).toBe(256);
+    expect(firstNoteOnTick(midiPathFor(id, 'tenor'))).toBe(512);
+    expect(firstNoteOnTick(midiPathFor(id, 'bass'))).toBe(768);
+  });
+
+  it('does not affect downstream timing (note durations + articulation gap still applied)', async () => {
+    // Smoke test: with a 2-quarter shared trim, the first note's duration
+    // (and the inter-note gap) should be the same as if there had been no
+    // leading rests at all — proving the trim only shaves head silence and
+    // doesn't accidentally clip into pitched-note territory.
+    const xml = withLeadingRestsXml([
+      { name: 'Soprano', step: 'C', octave: 5, leadingRestQuarters: 2, noteQuarters: 2 },
+      { name: 'Alto', step: 'G', octave: 4, leadingRestQuarters: 2, noteQuarters: 2 },
+      { name: 'Tenor', step: 'E', octave: 4, leadingRestQuarters: 2, noteQuarters: 2 },
+      { name: 'Bass', step: 'C', octave: 4, leadingRestQuarters: 2, noteQuarters: 2 },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('trim-preserves-notes');
+    await splitToMidis(id, p);
+
+    const sop = parseMidiFile(midiPathFor(id, 'soprano'));
+    const ons = sop.events.filter((e) => e.type === 'on').map((e) => e.tick);
+    const offs = sop.events.filter((e) => e.type === 'off').map((e) => e.tick);
+    // First note at 0 (trim worked), second note at 128 (relative timing
+    // intact), first note's off at 128 − ARTIC_GAP (articulation still on).
+    expect(ons).toEqual([0, 128]);
+    expect(offs).toEqual([128 - ARTIC_GAP, 256 - ARTIC_GAP]);
+  });
+
+  it('regression: a score with no leading rests is left untouched (trim=0)', async () => {
+    // No leading rests anywhere ⇒ globalHeadTrim = 0 ⇒ output identical to
+    // pre-trim behavior. Note that we also verify a voice that follows
+    // immediately is unaffected by the new head-trim parameter.
+    const xml = withLeadingRestsXml([
+      { name: 'Soprano', step: 'C', octave: 5, leadingRestQuarters: 0, noteQuarters: 4 },
+      { name: 'Alto', step: 'G', octave: 4, leadingRestQuarters: 0, noteQuarters: 4 },
+      { name: 'Tenor', step: 'E', octave: 4, leadingRestQuarters: 0, noteQuarters: 4 },
+      { name: 'Bass', step: 'C', octave: 4, leadingRestQuarters: 0, noteQuarters: 4 },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('trim-noop');
+    await splitToMidis(id, p);
+
+    for (const v of VOICES) {
+      expect(firstNoteOnTick(midiPathFor(id, v))).toBe(0);
+    }
+  });
+
+  it('excludes an entirely-empty voice from the trim min (so a silent voice does not force trim=0)', async () => {
+    // Some real scores have one of the four staves contain only whole rests
+    // for the entire piece (e.g. Bass tacet for a soprano-feature intro).
+    // We should still trim based on the voices that *do* sing — a voice
+    // with no pitched notes has nothing to contribute to "earliest entry".
+    //
+    // Construct: Soprano/Alto/Tenor each have 4 quarter rests then notes;
+    // Bass has 16 quarter rests, no pitched notes. Common trim should be
+    // 4 quarters = 512 ticks, NOT 0.
+    const xml = withLeadingRestsXml([
+      { name: 'Soprano', step: 'C', octave: 5, leadingRestQuarters: 4, noteQuarters: 4 },
+      { name: 'Alto', step: 'G', octave: 4, leadingRestQuarters: 4, noteQuarters: 4 },
+      { name: 'Tenor', step: 'E', octave: 4, leadingRestQuarters: 4, noteQuarters: 4 },
+      { name: 'Bass', step: 'C', octave: 4, leadingRestQuarters: 16, noteQuarters: 0 },
+    ]);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('trim-with-tacet');
+    await splitToMidis(id, p);
+
+    expect(firstNoteOnTick(midiPathFor(id, 'soprano'))).toBe(0);
+    expect(firstNoteOnTick(midiPathFor(id, 'alto'))).toBe(0);
+    expect(firstNoteOnTick(midiPathFor(id, 'tenor'))).toBe(0);
+    // Bass MIDI has no note-on events at all; nothing to assert here.
+    const bass = parseMidiFile(midiPathFor(id, 'bass'));
+    expect(bass.events.some((e) => e.type === 'on')).toBe(false);
+  });
+});

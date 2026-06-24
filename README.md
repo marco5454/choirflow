@@ -183,6 +183,7 @@ All optional; sensible defaults in code.
 | `MIX_PROMINENT_DB`             | `-3`                                                      | dB applied to the prominent voice in each mix            |
 | `MIX_BACKGROUND_DB`            | `-15`                                                     | dB applied to each background voice in each mix          |
 | `ARTICULATION_GAP_MS`          | `30`                                                      | Silent gap between consecutive notes in ms (`0` disables)|
+| `HEAD_PAD_MS`                  | `0`                                                       | Silence to keep at the head after trimming leading rests |
 
 ---
 

@@ -74,6 +74,22 @@ const ARTICULATION_GAP_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 30;
 })();
 
+// Intro trim: drop the leading silence common to ALL voices so the piece
+// starts (almost) at t=0 in every MP3. We compute the minimum leading-rest
+// duration across the four voices and shave that much off each one; relative
+// timing between voices is preserved (a voice that enters 4 measures later
+// than the first entry still enters 4 measures later — just measured from
+// t=0 rather than from "the score's bar 1 at original tempo").
+//
+// HEAD_PAD_MS adds a small breath back on at the head so playback doesn't
+// start mid-attack. 0 = truly instant (default per user request).
+const HEAD_PAD_MS = (() => {
+  const raw = process.env.HEAD_PAD_MS;
+  if (raw === undefined || raw === '') return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+})();
+
 /**
  * Convert an articulation gap in milliseconds to MIDI ticks at the given
  * tempo. The gap is always rounded toward zero so we never invent extra
@@ -90,6 +106,33 @@ function gapTicksAtTempo(tempoBpm: number): number {
   return Math.max(0, Math.round(ticks));
 }
 
+/**
+ * Convert HEAD_PAD_MS to ticks at the given tempo. Same math as
+ * gapTicksAtTempo. Returns 0 when disabled or for non-positive tempo.
+ */
+function headPadTicksAtTempo(tempoBpm: number): number {
+  if (HEAD_PAD_MS <= 0 || tempoBpm <= 0) return 0;
+  const ticks = (HEAD_PAD_MS / 1000) * (tempoBpm / 60) * TICKS_PER_QUARTER;
+  return Math.max(0, Math.round(ticks));
+}
+
+/**
+ * Sum the durations of all leading rests in a voice (every `VoiceNote` with
+ * `pitch === null` from the start of the array up to the first pitched note).
+ * If the voice is entirely rests (no pitched notes at all), returns null —
+ * the caller uses this to exclude empty voices from the global-trim min.
+ */
+function leadingRestTicks(notes: VoiceNote[]): number | null {
+  let total = 0;
+  for (const n of notes) {
+    if (n.pitch === null) {
+      total += n.durTicks;
+    } else {
+      return total;
+    }
+  }
+  return null;
+}
 // General MIDI: "Choir Aahs" = 53 (1-indexed). Same for all 4 voices in MVP.
 const VOICE_PROGRAM: Record<Voice, number> = {
   soprano: 53,
@@ -827,7 +870,12 @@ function openScorePartToVoiceNotes(part: ParsedPart): VoiceNote[] {
  *     four-beat tied note is one VoiceNote here and receives exactly one
  *     trim — not four trims as if it were four separate quarters.
  */
-function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
+function buildTrack(
+  notes: VoiceNote[],
+  voice: Voice,
+  tempo: number,
+  headTrimTicks: number = 0,
+) {
   const track = new MidiWriter.Track();
   track.addTrackName(voice);
   track.setTempo(tempo);
@@ -835,10 +883,24 @@ function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
 
   const gap = gapTicksAtTempo(tempo);
 
+  // We subtract `headTrimTicks` from the leading silence of this voice.
+  // Conceptually we're shifting the whole timeline of every voice forward by
+  // the same amount, so relative alignment between voices is preserved. We
+  // do it as we consume rests so that a voice whose leading rests sum to
+  // less than headTrimTicks (shouldn't happen — caller takes the min — but
+  // be defensive) doesn't go negative.
+  let remainingHeadTrim = Math.max(0, headTrimTicks);
+
   let pendingRestTicks = 0;
   for (const n of notes) {
     if (n.pitch === null) {
-      pendingRestTicks += n.durTicks;
+      let restTicks = n.durTicks;
+      if (remainingHeadTrim > 0) {
+        const consume = Math.min(remainingHeadTrim, restTicks);
+        restTicks -= consume;
+        remainingHeadTrim -= consume;
+      }
+      pendingRestTicks += restTicks;
       continue;
     }
 
@@ -1190,12 +1252,33 @@ export async function splitToMidis(jobId: string, inputXmlPath: string): Promise
     );
   }
 
+  // Intro trim: across all four voices, find the minimum number of ticks
+  // before any voice's first pitched note. Subtract that from each voice's
+  // leading rests so the piece starts at (approximately) t=0 in every MP3,
+  // while keeping voices aligned with each other. Voices that are entirely
+  // empty are excluded from the min — otherwise an empty voice (0 leading
+  // rest by trivial reason: no notes to "rest before") would force trim=0.
+  //
+  // HEAD_PAD_MS lets us leave a small breath of silence at the head; the
+  // user-facing default is 0 (truly instant).
+  const leadingRests = VOICES.map((v) => leadingRestTicks(voiceNotesByOutput[v]));
+  const pitchedLeading = leadingRests.filter((t): t is number => t !== null);
+  let globalHeadTrim = pitchedLeading.length > 0 ? Math.min(...pitchedLeading) : 0;
+  const pad = headPadTicksAtTempo(tempo);
+  globalHeadTrim = Math.max(0, globalHeadTrim - pad);
+  if (globalHeadTrim > 0) {
+    logger.info(
+      { jobId, ticks: globalHeadTrim, ppq: TICKS_PER_QUARTER, padMs: HEAD_PAD_MS },
+      'trimming leading silence common to all voices',
+    );
+  }
+
   for (const voice of VOICES) {
     const notes = voiceNotesByOutput[voice];
     if (notes.length === 0) {
       logger.warn({ jobId, voice }, 'voice produced 0 notes');
     }
-    const track = buildTrack(notes, voice, tempo);
+    const track = buildTrack(notes, voice, tempo, globalHeadTrim);
     const writer = new MidiWriter.Writer([track]);
     const outPath = midiPathFor(jobId, voice);
     await fs.promises.writeFile(outPath, Buffer.from(writer.buildFile()));
