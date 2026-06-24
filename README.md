@@ -76,6 +76,32 @@ npm install
 
 ## Run (development)
 
+The easiest way is a single launcher script that starts both servers, waits
+for them to be ready, and opens your browser. Press **Ctrl+C** in the
+launcher window to stop everything.
+
+**Linux / macOS:**
+
+```bash
+./scripts/start.sh
+```
+
+**Windows:** double-click `scripts\start.bat`, or from a terminal:
+
+```powershell
+scripts\start.bat
+# or, directly:
+powershell -ExecutionPolicy Bypass -File scripts\start.ps1
+```
+
+The launcher will run `npm install` automatically the first time if either
+`backend/node_modules` or `frontend/node_modules` is missing. Useful flags /
+env vars: `OPEN_BROWSER=0` (bash) or `-NoBrowser` (ps1) to skip opening the
+browser; `SKIP_INSTALL=1` or `-NoInstall` to skip the dependency check.
+
+<details>
+<summary>Or run the two dev servers manually in separate terminals</summary>
+
 ```bash
 # Backend  (http://localhost:3000)
 cd backend
@@ -85,6 +111,8 @@ npm run dev
 cd frontend
 npm run dev
 ```
+
+</details>
 
 Open the frontend URL, drop a `.xml` / `.musicxml` / `.mxl` / `.pdf` file,
 and wait for the four-voice MP3 players to appear. Each MP3 contains all
@@ -154,6 +182,7 @@ All optional; sensible defaults in code.
 | `RENDER_MP3_QSCALE`            | `4`                                                       | libmp3lame VBR quality (0=best)                          |
 | `MIX_PROMINENT_DB`             | `-3`                                                      | dB applied to the prominent voice in each mix            |
 | `MIX_BACKGROUND_DB`            | `-15`                                                     | dB applied to each background voice in each mix          |
+| `ARTICULATION_GAP_MS`          | `30`                                                      | Silent gap between consecutive notes in ms (`0` disables)|
 
 ---
 
