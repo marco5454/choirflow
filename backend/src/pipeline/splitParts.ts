@@ -657,13 +657,73 @@ function soundTempoBpm(sound: any): number | null {
  * e.g. "half = 60" means each half note (= 2 quarters) lasts 1 second,
  * which is 120 quarter-BPM.
  *
- * Returns null when the element is incomplete (missing per-minute, etc).
+ * OMR tools (Audiveris, etc.) routinely emit non-numeric `<per-minute>`
+ * payloads like "63—76" (em-dash range), "63-76", "ca. 70", "♩ = 70".
+ * `parsePerMinute()` extracts the first plausible BPM number from such
+ * decorations; for an explicit range it returns the LOW end, on the
+ * theory that a singer asking "what's the tempo?" wants the safer,
+ * more singable end of the indication.
+ *
+ * Returns null when the element is incomplete or the per-minute payload
+ * yields no numeric value at all.
  */
+/**
+ * Coerce a `<per-minute>` payload into a single positive BPM value.
+ *
+ * MusicXML defines <per-minute> as a number, but real-world (especially
+ * OMR-generated) inputs often contain decorations. Accepts:
+ *   "76"                  → 76
+ *   "76.5"                → 76.5
+ *   "63-76"               → 63   (range, hyphen)
+ *   "63—76"               → 63   (range, em-dash U+2014)
+ *   "63–76"               → 63   (range, en-dash U+2013)
+ *   "63 to 76"            → 63
+ *   "ca. 70" / "≈70"      → 70
+ *   "♩ = 70"              → 70   (decorative quarter-note glyph)
+ *   "" / "?" / "rubato"   → null
+ *
+ * For an explicit range, returns the LOW end (more conservative for
+ * choir practice; nothing about "63–76" tells us to prefer 76 over 63,
+ * and the slower end is the safer guess when in doubt).
+ *
+ * Returns null when no plausible positive number can be extracted.
+ */
+function parsePerMinute(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+
+  // fast-xml-parser already coerces a clean integer payload to a JS number.
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+  }
+
+  // We only know how to read strings. Anything else (object, array, boolean)
+  // means the XML shape is unexpected — bail out rather than stringify a
+  // structured value into "[object Object]".
+  if (typeof raw !== 'string') return null;
+
+  const text = raw.trim();
+  if (text === '') return null;
+
+  // Extract every floating-point number (decimal point or comma).
+  // We intentionally do not anchor — the payload may have leading/trailing
+  // glyphs ("♩ = 70", "ca. 70", "70 bpm").
+  const matches = text.match(/\d+(?:[.,]\d+)?/g);
+  if (!matches || matches.length === 0) return null;
+
+  const numbers = matches
+    .map((m) => Number(m.replace(',', '.')))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (numbers.length === 0) return null;
+
+  // For a range, pick the lower end (slower, safer for practice).
+  // For a single value, that's just the value.
+  return Math.min(...numbers);
+}
+
 function metronomeBpm(metronome: any): number | null {
   if (!metronome || typeof metronome !== 'object') return null;
-  const perMinuteRaw = metronome['per-minute'];
-  const perMinute = Number(perMinuteRaw);
-  if (!Number.isFinite(perMinute) || perMinute <= 0) return null;
+  const perMinute = parsePerMinute(metronome['per-minute']);
+  if (perMinute === null) return null;
 
   const beatUnitRaw = String(metronome['beat-unit'] ?? 'quarter').toLowerCase();
   // Map a beat-unit name to its length in quarter notes.

@@ -663,6 +663,71 @@ describe('splitToMidis – tempo detection', () => {
     const result = await splitToMidis(id, p);
     expect(result.tempo).toBe(120);
   });
+
+  // Real-world OMR (Audiveris, etc.) emits non-numeric <per-minute> payloads
+  // surprisingly often. Before this hardening these all silently fell through
+  // to the 120 BPM default, making scores play ~2× too fast.
+  it('reads a hyphen-separated tempo range and picks the low end (63-76 ⇒ 63)', async () => {
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>63-76</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-range-hyphen');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(63);
+  });
+
+  it('reads an em-dash tempo range (Audiveris-style "63—76" ⇒ 63)', async () => {
+    // U+2014 EM DASH — this is the exact byte sequence Audiveris emits for
+    // ranges like "♩ = 63—76". Number() of this string is NaN.
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>63\u201476</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-range-emdash');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(63);
+  });
+
+  it('reads an en-dash tempo range ("63–76" ⇒ 63)', async () => {
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>63\u201376</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-range-endash');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(63);
+  });
+
+  it('extracts BPM from a decorated payload ("ca. 70" ⇒ 70)', async () => {
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>ca. 70</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-decorated');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(70);
+  });
+
+  it('still falls back to 120 BPM when <per-minute> has no numbers ("rubato")', async () => {
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>rubato</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-no-number');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(120);
+  });
 });
 
 describe('splitToMidis – articulation gap between consecutive notes', () => {
