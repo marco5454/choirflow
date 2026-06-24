@@ -133,12 +133,15 @@ function leadingRestTicks(notes: VoiceNote[]): number | null {
   }
   return null;
 }
-// General MIDI: "Choir Aahs" = 53 (1-indexed). Same for all 4 voices in MVP.
+// General MIDI: "Acoustic Grand Piano" = 1 (1-indexed). A clear, percussive
+// pitched timbre keeps each note's fundamental unambiguous so a singer can
+// match it without being misled by the slow attack and vowel cues of a
+// choral pad. Same patch for all 4 voices.
 const VOICE_PROGRAM: Record<Voice, number> = {
-  soprano: 53,
-  alto: 53,
-  tenor: 53,
-  bass: 53,
+  soprano: 1,
+  alto: 1,
+  tenor: 1,
+  bass: 1,
 };
 
 /**
