@@ -76,6 +76,10 @@ interface RawEvent {
   tick: number; // start time within the part, in ticks
   durTicks: number;
   pitches: number[]; // empty array = rest
+  /** This note starts a tie (sustain into the next note of the same pitch). */
+  tieStart?: boolean;
+  /** This note continues a tie started by the previous note of the same pitch. */
+  tieStop?: boolean;
 }
 
 interface ParsedPart {
@@ -146,8 +150,11 @@ function detectClef(partXml: any): 'treble' | 'bass' | 'other' {
 
 /**
  * Walk a <part>, producing time-stamped RawEvents.
- * Honours: <divisions>, <chord>, <rest>, <pitch>, <duration>, <voice>, <backup>, <forward>.
- * Ignores: ties (handled as separate notes — fine for synthesis), slurs, dynamics.
+ * Honours: <divisions>, <chord>, <rest>, <pitch>, <duration>, <voice>, <backup>, <forward>, <tie>.
+ * Ignores: slurs, dynamics.
+ *
+ * <tie type="start"|"stop"> is captured per event so consecutive same-pitch
+ * notes can be merged into a single sustained note (see mergeTiedEvents).
  */
 function parsePartRaw(partXml: any, jobId: string, partLabel: string): ParsedPart {
   const measures = ensureArray(partXml.measure);
@@ -225,6 +232,17 @@ function parsePartRaw(partXml: any, jobId: string, partLabel: string): ParsedPar
             const alter = node.pitch.alter !== undefined ? Number(node.pitch.alter) : 0;
             events[lastNonChordEventIndex].pitches.push(pitchToMidi(step, alter, octave));
           }
+          // Chord notes may also carry <tie>. We OR the tie state onto the
+          // parent event so a fully-tied chord (all pitches tied) is treated
+          // as one sustained event. This is an approximation: partial-tie
+          // chords (some pitches re-articulate, others sustain) are rare in
+          // choral music and fall back to "all sustain".
+          const chordTies = ensureArray(node.tie);
+          for (const t of chordTies) {
+            const type = String(t?.['@_type'] ?? '').toLowerCase();
+            if (type === 'start') events[lastNonChordEventIndex].tieStart = true;
+            else if (type === 'stop') events[lastNonChordEventIndex].tieStop = true;
+          }
           // <chord> doesn't advance time.
           continue;
         }
@@ -242,6 +260,16 @@ function parsePartRaw(partXml: any, jobId: string, partLabel: string): ParsedPar
           const octave = Number(node.pitch.octave);
           const alter = node.pitch.alter !== undefined ? Number(node.pitch.alter) : 0;
           evt.pitches.push(pitchToMidi(step, alter, octave));
+        }
+        // Capture <tie type="start"|"stop"> children. A note can carry both
+        // (it sits in the middle of a tie chain).
+        if (!isRest) {
+          const ties = ensureArray(node.tie);
+          for (const t of ties) {
+            const type = String(t?.['@_type'] ?? '').toLowerCase();
+            if (type === 'start') evt.tieStart = true;
+            else if (type === 'stop') evt.tieStop = true;
+          }
         }
         events.push(evt);
         lastNonChordEventIndex = events.length - 1;
@@ -285,7 +313,62 @@ function parsePartRaw(partXml: any, jobId: string, partLabel: string): ParsedPar
     void partLabel;
   }
 
-  return { partName: '', clef: 'other', events, voiceNumbers };
+  return { partName: '', clef: 'other', events: mergeTiedEvents(events), voiceNumbers };
+}
+
+/**
+ * Merge consecutive same-voice, same-pitch events when the earlier event has
+ * `tieStart` and the later event has `tieStop`. The merged event's duration
+ * is the sum of both durations; the second event is dropped. Tie chains
+ * (start, start+stop, start+stop, stop) collapse into a single sustained note.
+ *
+ * Pitch equality is set-based (chord pitches must match exactly). Rest events
+ * never participate in tie merging.
+ *
+ * Operates per <voice>; events from different voices are independent.
+ */
+function mergeTiedEvents(events: RawEvent[]): RawEvent[] {
+  if (events.length === 0) return events;
+
+  // Group by voice while preserving relative order.
+  const byVoice = new Map<number, RawEvent[]>();
+  for (const e of events) {
+    if (!byVoice.has(e.voice)) byVoice.set(e.voice, []);
+    byVoice.get(e.voice)!.push(e);
+  }
+
+  const merged = new Set<RawEvent>(); // events absorbed into a predecessor
+  const pitchKey = (e: RawEvent) => [...e.pitches].sort((a, b) => a - b).join(',');
+
+  for (const voiceEvents of byVoice.values()) {
+    // Within a voice, events are appended in tick order by parsePartRaw,
+    // but we sort defensively to handle <backup> + multi-voice interleavings.
+    const sorted = [...voiceEvents].sort((a, b) => a.tick - b.tick);
+    for (let i = 0; i < sorted.length; i++) {
+      const head = sorted[i];
+      if (merged.has(head) || !head.tieStart || head.pitches.length === 0) continue;
+      const key = pitchKey(head);
+      let j = i + 1;
+      // Skip events already merged (rare with chord overlaps).
+      while (j < sorted.length && merged.has(sorted[j])) j++;
+      while (j < sorted.length) {
+        const next = sorted[j];
+        // Tie chain stops if next event isn't a tieStop with matching pitches.
+        if (!next.tieStop || pitchKey(next) !== key) break;
+        head.durTicks += next.durTicks;
+        merged.add(next);
+        // If this link is also a start (middle of a chain), continue absorbing.
+        if (!next.tieStart) break;
+        j++;
+        while (j < sorted.length && merged.has(sorted[j])) j++;
+      }
+      // The merged head is no longer waiting for a continuation.
+      head.tieStart = false;
+    }
+  }
+
+  if (merged.size === 0) return events;
+  return events.filter((e) => !merged.has(e));
 }
 
 /**
@@ -335,26 +418,50 @@ function attachOrderedMeasureChildren(structuredDoc: any, orderedDoc: any): void
     // Empty element with attributes: { '#text': '' } typically, or empty array.
     const result: any = {};
     for (const item of arr) {
-      const keys = Object.keys(item).filter((k) => !k.startsWith(':@'));
+      // In preserveOrder mode, each item is `{ <tag>: [...], ':@': { @_attr: val } }`.
+      // We capture the tag's attributes once (via `:@`) and merge them onto the
+      // reconstructed child object so e.g. <tie type="start"/> keeps its type.
+      const attrs = item[':@'];
+      const keys = Object.keys(item).filter((k) => k !== ':@');
       for (const k of keys) {
         const val = item[k];
         if (k === '#text') {
           // leaf text node
           result.__text = val;
-        } else {
-          // Empty self-closing tag like <chord/> -> [] in ordered form.
-          // We mark presence with `{}` so `node.chord !== undefined` works.
-          if (Array.isArray(val) && val.length === 0) {
-            result[k] = {};
+        } else if (Array.isArray(val) && val.length === 0) {
+          // Empty self-closing tag like <chord/>. Mark presence; attach
+          // attributes (if any) so attribute-bearing self-closers
+          // (e.g. <tie type="stop"/>) round-trip correctly.
+          const emptyChild = attrs && typeof attrs === 'object' ? { ...attrs } : {};
+          if (k in result) {
+            const prev = result[k];
+            result[k] = Array.isArray(prev) ? [...prev, emptyChild] : [prev, emptyChild];
           } else {
-            const sub = orderedToStructured(val);
-            // If sub has only __text, lift to scalar.
-            if (sub && typeof sub === 'object' && Object.keys(sub).length === 1 && '__text' in sub) {
-              result[k] = sub.__text;
-            } else {
-              // If multiple of same key under one parent, keep last (we don't expect this for our fields).
-              result[k] = sub;
+            result[k] = emptyChild;
+          }
+        } else {
+          const sub = orderedToStructured(val);
+          // If this tag carries attributes, merge them onto its reconstructed
+          // object so callers can read e.g. sub['@_number'] for <clef number="1">.
+          if (attrs && typeof attrs === 'object' && sub && typeof sub === 'object') {
+            for (const ak of Object.keys(attrs)) {
+              sub[ak] = attrs[ak];
             }
+          }
+          // If sub has only __text, lift to scalar.
+          let lifted: any;
+          if (sub && typeof sub === 'object' && Object.keys(sub).length === 1 && '__text' in sub) {
+            lifted = sub.__text;
+          } else {
+            lifted = sub;
+          }
+          // Accumulate when the same tag appears multiple times under one
+          // parent (e.g. two <tie> children on a note in a tie chain).
+          if (k in result) {
+            const prev = result[k];
+            result[k] = Array.isArray(prev) ? [...prev, lifted] : [prev, lifted];
+          } else {
+            result[k] = lifted;
           }
         }
       }
