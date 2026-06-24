@@ -22,9 +22,13 @@
  *     the typical musical intent in hymnal-style scoring.
  *
  * Limitations (MVP):
- *   - Tempo from first <sound tempo="..."/> encountered, else 120.
+ *   - Tempo: first explicit <sound tempo="..."/> (under <measure> or
+ *     <direction>) wins; falls back to a printed <metronome> mark; else 120.
+ *     Mid-piece tempo changes are not honoured — the first match applies to
+ *     the whole piece.
  *   - <chord> sequences with 3+ notes drop middle pitches.
- *   - Ties / slurs / dynamics / repeats / tuplets not honoured.
+ *   - Slurs / dynamics / repeats / tuplets not honoured. Ties ARE merged
+ *     into single sustained notes.
  *   - .mxl (compressed MusicXML) is unwrapped transparently via loadMusicXmlText.
  */
 
@@ -484,16 +488,66 @@ function attachOrderedMeasureChildren(structuredDoc: any, orderedDoc: any): void
   }
 }
 
+/**
+ * Find the score's tempo in BPM. MusicXML can express tempo in several
+ * places; we look at them in priority order and return the first valid
+ * value we encounter:
+ *
+ *   1. `<sound tempo="…">` placed directly under `<measure>`. Rare but
+ *      explicit — used by some tools that write playback-only tempo.
+ *   2. `<sound tempo="…">` nested inside `<direction>`. This is the
+ *      standard MusicXML location for a tempo marking attached to a beat
+ *      (e.g. `<direction><direction-type><metronome>…</metronome></direction-type><sound tempo="76"/></direction>`).
+ *   3. `<direction><direction-type><metronome>` — when there's a visible
+ *      metronome mark ("♩ = 76") but no `<sound tempo>` sibling, derive
+ *      BPM from `<per-minute>` and the beat-unit. Most OMR tools emit
+ *      both; some emit only the metronome.
+ *
+ * Falls back to 120 BPM if nothing usable is found.
+ *
+ * We don't currently honour mid-piece tempo changes; the first match wins
+ * and applies to the whole piece. This matches MIDI-Writer's single
+ * setTempo() per track. A later change can layer in tempo-change events
+ * if scores with rit./accel. become a real use case.
+ */
 function findTempo(parsedDoc: any): number {
-  // Scan all parts/measures for the first <sound tempo="...">.
   try {
     const parts = ensureArray(parsedDoc['score-partwise'].part);
+
+    // Pass 1: prefer explicit <sound tempo>, whether it sits directly under
+    // <measure> or nested inside a <direction>. Either form gives an exact BPM.
     for (const p of parts) {
       const measures = ensureArray(p.measure);
       for (const m of measures) {
-        const sounds = ensureArray(m.sound);
-        for (const s of sounds) {
-          if (s['@_tempo']) return Number(s['@_tempo']);
+        // 1a. Measure-level <sound tempo>.
+        for (const s of ensureArray(m.sound)) {
+          const t = soundTempoBpm(s);
+          if (t !== null) return t;
+        }
+        // 1b. <direction><sound tempo>.
+        for (const d of ensureArray(m.direction)) {
+          for (const s of ensureArray(d?.sound)) {
+            const t = soundTempoBpm(s);
+            if (t !== null) return t;
+          }
+        }
+      }
+    }
+
+    // Pass 2: derive BPM from a visible metronome mark when no <sound tempo>
+    // was found anywhere. We only fall back to this in a second pass so an
+    // explicit playback tempo elsewhere in the score wins over a printed
+    // metronome on the first measure.
+    for (const p of parts) {
+      const measures = ensureArray(p.measure);
+      for (const m of measures) {
+        for (const d of ensureArray(m.direction)) {
+          for (const dt of ensureArray(d?.['direction-type'])) {
+            for (const mm of ensureArray(dt?.metronome)) {
+              const t = metronomeBpm(mm);
+              if (t !== null) return t;
+            }
+          }
         }
       }
     }
@@ -501,6 +555,71 @@ function findTempo(parsedDoc: any): number {
     /* ignore */
   }
   return 120;
+}
+
+/** Extract a positive numeric tempo from a `<sound tempo="…"/>` element. */
+function soundTempoBpm(sound: any): number | null {
+  if (!sound) return null;
+  const raw = sound['@_tempo'];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Convert a `<metronome>` element to BPM in quarter-notes-per-minute.
+ *
+ *   <metronome>
+ *     <beat-unit>quarter</beat-unit>      (or eighth, half, dotted-quarter …)
+ *     <beat-unit-dot/>                    (optional, may repeat)
+ *     <per-minute>76</per-minute>
+ *   </metronome>
+ *
+ * `findTempo` returns a single quarter-note BPM (what MidiWriter's
+ * `setTempo()` accepts), so we scale away from the beat-unit:
+ *   actual quarter-BPM = per-minute × (beat-unit-quarter-ratio)
+ *
+ * e.g. "half = 60" means each half note (= 2 quarters) lasts 1 second,
+ * which is 120 quarter-BPM.
+ *
+ * Returns null when the element is incomplete (missing per-minute, etc).
+ */
+function metronomeBpm(metronome: any): number | null {
+  if (!metronome || typeof metronome !== 'object') return null;
+  const perMinuteRaw = metronome['per-minute'];
+  const perMinute = Number(perMinuteRaw);
+  if (!Number.isFinite(perMinute) || perMinute <= 0) return null;
+
+  const beatUnitRaw = String(metronome['beat-unit'] ?? 'quarter').toLowerCase();
+  // Map a beat-unit name to its length in quarter notes.
+  const beatUnitQuarters: Record<string, number> = {
+    '1024th': 4 / 1024,
+    '512th': 4 / 512,
+    '256th': 4 / 256,
+    '128th': 4 / 128,
+    '64th': 4 / 64,
+    '32nd': 4 / 32,
+    '16th': 4 / 16,
+    eighth: 0.5,
+    quarter: 1,
+    half: 2,
+    whole: 4,
+    breve: 8,
+    long: 16,
+  };
+  let beatQuarters = beatUnitQuarters[beatUnitRaw];
+  if (beatQuarters === undefined) return null;
+
+  // <beat-unit-dot/> appears once per augmentation dot. n dots multiplies
+  // the duration by (2 - 1/2^n).
+  const dotCount = ensureArray(metronome['beat-unit-dot']).length;
+  if (dotCount > 0) {
+    beatQuarters *= 2 - Math.pow(0.5, dotCount);
+  }
+
+  // quarter-BPM = per-minute * (beat length in quarters)
+  const bpm = perMinute * beatQuarters;
+  return Number.isFinite(bpm) && bpm > 0 ? bpm : null;
 }
 
 /**

@@ -545,3 +545,114 @@ describe('splitToMidis – tie merging', () => {
     expect(noteOnNames(sop)).toEqual(['C5', 'D5']);
   });
 });
+
+describe('splitToMidis – tempo detection', () => {
+  /**
+   * Build a minimal 4-part open score where the first measure of part 1
+   * contains the caller-supplied `firstMeasureExtras` (typically a
+   * `<direction>` or `<sound>` block). Each part holds one quarter note so
+   * splitToMidis has something to render and we can read back result.tempo.
+   */
+  function tempoXml(firstMeasureExtras: string): string {
+    const partBody = (id: string, step: string, octave: number, extras: string) =>
+      `<part id="${id}"><measure number="1">` +
+      `<attributes><divisions>1</divisions></attributes>` +
+      extras +
+      `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>1</duration></note>` +
+      `</measure></part>`;
+    return (
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Soprano</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Alto</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Tenor</part-name></score-part>' +
+      '<score-part id="P4"><part-name>Bass</part-name></score-part>' +
+      '</part-list>' +
+      partBody('P1', 'C', 5, firstMeasureExtras) +
+      partBody('P2', 'G', 4, '') +
+      partBody('P3', 'E', 4, '') +
+      partBody('P4', 'C', 4, '') +
+      '</score-partwise>'
+    );
+  }
+
+  it('reads <sound tempo> nested inside <direction> (standard MusicXML location)', async () => {
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>76</per-minute></metronome>' +
+      '</direction-type><sound tempo="76"/></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-direction-sound');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(76);
+  });
+
+  it('still reads <sound tempo> placed directly under <measure>', async () => {
+    const xml = tempoXml('<sound tempo="92"/>');
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-measure-sound');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(92);
+  });
+
+  it('derives BPM from a <metronome> mark when no <sound tempo> is present', async () => {
+    // "quarter = 84" with no playback-tempo sibling.
+    const extras =
+      '<direction placement="above"><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>84</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-metronome-quarter');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(84);
+  });
+
+  it('scales BPM correctly when the metronome beat unit is not a quarter', async () => {
+    // "half = 60" ⇒ a half note per second ⇒ 120 quarter-BPM.
+    const extras =
+      '<direction><direction-type>' +
+      '<metronome><beat-unit>half</beat-unit><per-minute>60</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-metronome-half');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(120);
+  });
+
+  it('honours <beat-unit-dot/> on metronome marks (dotted-quarter = 90 ⇒ 135 quarter-BPM)', async () => {
+    // Dotted quarter = 1.5 quarter notes; per-minute 90 ⇒ 135 quarter-BPM.
+    const extras =
+      '<direction><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><beat-unit-dot/><per-minute>90</per-minute></metronome>' +
+      '</direction-type></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-metronome-dotted');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(135);
+  });
+
+  it('prefers an explicit <sound tempo> over a <metronome> mark anywhere in the score', async () => {
+    // Visible metronome says 60 but playback tempo says 100 — playback wins.
+    const extras =
+      '<direction><direction-type>' +
+      '<metronome><beat-unit>quarter</beat-unit><per-minute>60</per-minute></metronome>' +
+      '</direction-type><sound tempo="100"/></direction>';
+    const xml = tempoXml(extras);
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-sound-wins');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(100);
+  });
+
+  it('falls back to 120 BPM when the score has no tempo information at all', async () => {
+    const xml = tempoXml('');
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('tempo-default');
+    const result = await splitToMidis(id, p);
+    expect(result.tempo).toBe(120);
+  });
+});
