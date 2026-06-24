@@ -423,6 +423,14 @@ describe('splitToMidis – tie merging', () => {
     return off.tick - on.tick;
   }
 
+  // Default articulation gap is 30 ms; at 120 BPM with 128 ppq that's
+  // round(30 / 1000 * 120 / 60 * 128) = 8 ticks trimmed off the note-off
+  // of every pitched note. Tests below expect (raw_duration − ARTIC_GAP).
+  // The trimmed time becomes silence before the *next* event, so total
+  // elapsed time is preserved — but a tie chain collapses to one note, so
+  // its single trim is observable in its note-off position.
+  const ARTIC_GAP = 8;
+
   it('merges two same-pitch notes connected by <tie> into a single sustained note', async () => {
     // 2 half notes (duration=2 with divisions=1 ⇒ 2 quarters each = 256 ticks each),
     // tied together. After merge: one note of 512 ticks. Before: two notes of 256.
@@ -444,7 +452,7 @@ describe('splitToMidis – tie merging', () => {
       const parsed = parseMidiFile(midiPathFor(id, v));
       const ons = parsed.events.filter((e) => e.type === 'on');
       expect(ons).toHaveLength(1); // merged into one note
-      expect(firstNoteDuration(midiPathFor(id, v))).toBe(512); // 2 × 256
+      expect(firstNoteDuration(midiPathFor(id, v))).toBe(512 - ARTIC_GAP); // 2 × 256 − gap
     }
   });
 
@@ -471,7 +479,7 @@ describe('splitToMidis – tie merging', () => {
       const parsed = parseMidiFile(midiPathFor(id4, v));
       const ons = parsed.events.filter((e) => e.type === 'on');
       expect(ons).toHaveLength(1);
-      expect(firstNoteDuration(midiPathFor(id4, v))).toBe(768); // 3 × 256
+      expect(firstNoteDuration(midiPathFor(id4, v))).toBe(768 - ARTIC_GAP); // 3 × 256 − gap
     }
     // Avoid unused warnings in case the lone-part variant is needed later.
     void p;
@@ -508,7 +516,7 @@ describe('splitToMidis – tie merging', () => {
     const sop = parseMidiFile(midiPathFor(id, 'soprano'));
     const ons = sop.events.filter((e) => e.type === 'on');
     expect(ons).toHaveLength(1);
-    expect(firstNoteDuration(midiPathFor(id, 'soprano'))).toBe(512);
+    expect(firstNoteDuration(midiPathFor(id, 'soprano'))).toBe(512 - ARTIC_GAP);
   });
 
   it('does not merge across different pitches (defensive)', async () => {
@@ -654,5 +662,157 @@ describe('splitToMidis – tempo detection', () => {
     const id = jobId('tempo-default');
     const result = await splitToMidis(id, p);
     expect(result.tempo).toBe(120);
+  });
+});
+
+describe('splitToMidis – articulation gap between consecutive notes', () => {
+  // At the default 30 ms gap and the default 120 BPM (no <sound tempo> in
+  // these fixtures), every pitched note is trimmed by 8 ticks: the freed
+  // ticks become silence before the next note. Tests pin this exact value
+  // so any change to the default is caught here intentionally.
+  const ARTIC_GAP = 8;
+
+  /** Four-part XML with each part holding `count` quarter notes of one pitch. */
+  function quartersXml(
+    parts: Array<{ name: string; step: string; octave: number }>,
+    count: number,
+  ): string {
+    const partList = parts
+      .map((p, i) => `<score-part id="P${i + 1}"><part-name>${p.name}</part-name></score-part>`)
+      .join('');
+    const partBodies = parts
+      .map((p, i) => {
+        let notes = '';
+        for (let n = 0; n < count; n++) {
+          notes += `<note><pitch><step>${p.step}</step><octave>${p.octave}</octave></pitch><duration>1</duration></note>`;
+        }
+        return (
+          `<part id="P${i + 1}"><measure number="1">` +
+          `<attributes><divisions>1</divisions></attributes>` +
+          notes +
+          `</measure></part>`
+        );
+      })
+      .join('');
+    return `<?xml version="1.0"?><score-partwise><part-list>${partList}</part-list>${partBodies}</score-partwise>`;
+  }
+
+  it('inserts a silent gap between two consecutive same-pitch notes', async () => {
+    // Two quarter notes (divisions=1 ⇒ 128 ticks each) on the same pitch.
+    // Without a gap, note-off of #1 = note-on of #2 = tick 128. With the
+    // gap, note-off of #1 = 128 − 8 = 120, and note-on of #2 is still 128.
+    const xml = quartersXml(
+      [
+        { name: 'Soprano', step: 'C', octave: 5 },
+        { name: 'Alto', step: 'G', octave: 4 },
+        { name: 'Tenor', step: 'E', octave: 4 },
+        { name: 'Bass', step: 'C', octave: 4 },
+      ],
+      2,
+    );
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('artic-pair');
+    await splitToMidis(id, p);
+
+    const sop = parseMidiFile(midiPathFor(id, 'soprano'));
+    const ons = sop.events.filter((e) => e.type === 'on');
+    const offs = sop.events.filter((e) => e.type === 'off');
+    expect(ons).toHaveLength(2);
+    expect(offs).toHaveLength(2);
+
+    // Total elapsed time across the two notes is preserved.
+    expect(ons[0].tick).toBe(0);
+    expect(ons[1].tick).toBe(128);
+
+    // First note is trimmed; the gap lands between the off and the next on.
+    expect(offs[0].tick).toBe(128 - ARTIC_GAP);
+    expect(ons[1].tick - offs[0].tick).toBe(ARTIC_GAP);
+  });
+
+  it('applies the gap uniformly across a longer run of notes', async () => {
+    // Four quarter notes ⇒ four trims, all of equal size; the trim of note N
+    // is absorbed into a wait before note N+1, so each note-on remains on its
+    // original tick (0, 128, 256, 384) and the gap is always 8 ticks wide.
+    const xml = quartersXml(
+      [
+        { name: 'Soprano', step: 'C', octave: 5 },
+        { name: 'Alto', step: 'G', octave: 4 },
+        { name: 'Tenor', step: 'E', octave: 4 },
+        { name: 'Bass', step: 'C', octave: 4 },
+      ],
+      4,
+    );
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('artic-run');
+    await splitToMidis(id, p);
+
+    const sop = parseMidiFile(midiPathFor(id, 'soprano'));
+    const ons = sop.events.filter((e) => e.type === 'on').map((e) => e.tick);
+    const offs = sop.events.filter((e) => e.type === 'off').map((e) => e.tick);
+    expect(ons).toEqual([0, 128, 256, 384]);
+    expect(offs).toEqual([128 - ARTIC_GAP, 256 - ARTIC_GAP, 384 - ARTIC_GAP, 512 - ARTIC_GAP]);
+  });
+
+  it('trims the final note too — its note-off comes before the track end', async () => {
+    // Verifies that the gap isn't conditioned on a "next note exists" check;
+    // the final note simply has a tiny silent tail (harmless).
+    const xml = quartersXml(
+      [
+        { name: 'Soprano', step: 'C', octave: 5 },
+        { name: 'Alto', step: 'G', octave: 4 },
+        { name: 'Tenor', step: 'E', octave: 4 },
+        { name: 'Bass', step: 'C', octave: 4 },
+      ],
+      1,
+    );
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('artic-final');
+    await splitToMidis(id, p);
+
+    const sop = parseMidiFile(midiPathFor(id, 'soprano'));
+    const ons = sop.events.filter((e) => e.type === 'on');
+    const offs = sop.events.filter((e) => e.type === 'off');
+    expect(ons).toHaveLength(1);
+    expect(offs).toHaveLength(1);
+    expect(offs[0].tick).toBe(128 - ARTIC_GAP);
+  });
+
+  it('never trims a note below 1 tick (defensive for very short notes)', async () => {
+    // Build a part containing a note with duration=1 against divisions=128
+    // ⇒ ticks = round(1/128 * 128) = 1 tick — shorter than the 8-tick gap.
+    // The note should still produce a note-on / note-off pair, with the
+    // off at least 1 tick after the on. (We don't care exactly where; only
+    // that the note isn't silently dropped to zero length.)
+    const xml =
+      '<?xml version="1.0"?><score-partwise>' +
+      '<part-list>' +
+      '<score-part id="P1"><part-name>Soprano</part-name></score-part>' +
+      '<score-part id="P2"><part-name>Alto</part-name></score-part>' +
+      '<score-part id="P3"><part-name>Tenor</part-name></score-part>' +
+      '<score-part id="P4"><part-name>Bass</part-name></score-part>' +
+      '</part-list>' +
+      '<part id="P1"><measure number="1">' +
+      '<attributes><divisions>128</divisions></attributes>' +
+      '<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration></note>' +
+      '<note><pitch><step>D</step><octave>5</octave></pitch><duration>128</duration></note>' +
+      '</measure></part>' +
+      '<part id="P2"><measure number="1"><attributes><divisions>128</divisions></attributes>' +
+      '<note><pitch><step>G</step><octave>4</octave></pitch><duration>128</duration></note></measure></part>' +
+      '<part id="P3"><measure number="1"><attributes><divisions>128</divisions></attributes>' +
+      '<note><pitch><step>E</step><octave>4</octave></pitch><duration>128</duration></note></measure></part>' +
+      '<part id="P4"><measure number="1"><attributes><divisions>128</divisions></attributes>' +
+      '<note><pitch><step>C</step><octave>4</octave></pitch><duration>128</duration></note></measure></part>' +
+      '</score-partwise>';
+    const p = writeTmp(xml, '.xml');
+    const id = jobId('artic-min-tick');
+    await splitToMidis(id, p);
+
+    const sop = parseMidiFile(midiPathFor(id, 'soprano'));
+    const firstOn = sop.events.find((e) => e.type === 'on');
+    const firstOff = sop.events.find((e) => e.type === 'off' && e.pitch === firstOn?.pitch);
+    expect(firstOn).toBeDefined();
+    expect(firstOff).toBeDefined();
+    // The 1-tick note still has at least 1 tick between on and off.
+    expect(firstOff!.tick - firstOn!.tick).toBeGreaterThanOrEqual(1);
   });
 });

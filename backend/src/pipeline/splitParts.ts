@@ -61,6 +61,35 @@ const NOT_MUSICXML_HINT =
 // midi-writer-js: 128 ticks per quarter note (its internal "T" tick base).
 const TICKS_PER_QUARTER = 128;
 
+// Articulation: how much silence to insert between consecutive pitched notes
+// within a single voice. Without a small gap, fluidsynth (and most GM synths)
+// fuse adjacent notes — same-pitch repeats sound like one held note, and
+// stepwise motion gets a smeared, slurred quality. A 30 ms gap is below the
+// threshold of staccato but enough for the synth to render a distinct attack
+// on the next note. Set to 0 to disable.
+const ARTICULATION_GAP_MS = (() => {
+  const raw = process.env.ARTICULATION_GAP_MS;
+  if (raw === undefined || raw === '') return 30;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 30;
+})();
+
+/**
+ * Convert an articulation gap in milliseconds to MIDI ticks at the given
+ * tempo. The gap is always rounded toward zero so we never invent extra
+ * silence; rounding to the nearest tick is fine in practice (sub-tick
+ * differences are inaudible at 128 ppq).
+ *
+ * Returns 0 when the gap is disabled or when the tempo is non-positive
+ * (defensive — splitToMidis defaults to 120).
+ */
+function gapTicksAtTempo(tempoBpm: number): number {
+  if (ARTICULATION_GAP_MS <= 0 || tempoBpm <= 0) return 0;
+  // beats per ms = tempo / 60_000  ⇒  ticks per ms = (tempo / 60_000) * 128
+  const ticks = (ARTICULATION_GAP_MS / 1000) * (tempoBpm / 60) * TICKS_PER_QUARTER;
+  return Math.max(0, Math.round(ticks));
+}
+
 // General MIDI: "Choir Aahs" = 53 (1-indexed). Same for all 4 voices in MVP.
 const VOICE_PROGRAM: Record<Voice, number> = {
   soprano: 53,
@@ -775,11 +804,36 @@ function openScorePartToVoiceNotes(part: ParsedPart): VoiceNote[] {
   return streamToVoiceNotes(evts);
 }
 
+/**
+ * Build a MIDI track for one voice. Each pitched note is shortened by a small
+ * articulation gap, with the trimmed ticks moved into the *next* event's wait
+ * — so total elapsed time (and therefore beat / barline alignment with the
+ * other voices' tracks) is preserved exactly.
+ *
+ * Why: without a gap, midi-writer-js emits each note's note-off at the same
+ * tick as the next note's note-on. Fluidsynth (and most General-MIDI synths)
+ * then fuse adjacent same-pitch notes into one held note, and stepwise lines
+ * sound smeared. ~30 ms is enough for the synth to render a distinct attack
+ * without sounding staccato. See ARTICULATION_GAP_MS at the top of the file.
+ *
+ * Notes:
+ *   - Rests are *not* shortened; the gap only trims pitched notes. Trimming
+ *     a rest would re-extend it and defeat the purpose.
+ *   - We never trim below 1 tick — extremely short notes (e.g. 32nd-note
+ *     ornaments) keep at least a token attack so they're not silently dropped.
+ *   - The last pitched note in the track is trimmed too; the freed time just
+ *     becomes a tiny silent tail at end-of-track (harmless).
+ *   - Tied notes have already been merged by mergeTiedEvents(), so a held
+ *     four-beat tied note is one VoiceNote here and receives exactly one
+ *     trim — not four trims as if it were four separate quarters.
+ */
 function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
   const track = new MidiWriter.Track();
   track.addTrackName(voice);
   track.setTempo(tempo);
   track.addEvent(new MidiWriter.ProgramChangeEvent({ instrument: VOICE_PROGRAM[voice] }));
+
+  const gap = gapTicksAtTempo(tempo);
 
   let pendingRestTicks = 0;
   for (const n of notes) {
@@ -787,15 +841,21 @@ function buildTrack(notes: VoiceNote[], voice: Voice, tempo: number) {
       pendingRestTicks += n.durTicks;
       continue;
     }
+
+    // Trim the note by the gap, but never below 1 tick. Whatever we trim is
+    // pushed forward as silence before the next note, so timing is preserved.
+    const trim = Math.min(gap, Math.max(0, n.durTicks - 1));
+    const noteTicks = n.durTicks - trim;
+
     track.addEvent(
       new MidiWriter.NoteEvent({
         pitch: [n.pitch],
-        duration: `T${n.durTicks}`,
+        duration: `T${noteTicks}`,
         wait: pendingRestTicks > 0 ? `T${pendingRestTicks}` : 0,
         velocity: 80,
       }),
     );
-    pendingRestTicks = 0;
+    pendingRestTicks = trim;
   }
   return track;
 }
